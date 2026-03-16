@@ -3,13 +3,13 @@ use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D_RECT_F, D2D_SIZE_U, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_PIXEL_FORMAT,
 };
-use windows::Win32::Graphics::Direct2D::{D2D1_BITMAP_BRUSH_PROPERTIES, D2D1_EXTEND_MODE_WRAP};
 use windows::Win32::Graphics::Direct2D::{
-    D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, D2D1_BITMAP_PROPERTIES,
-    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_HWND_RENDER_TARGET_PROPERTIES,
+    D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
+    D2D1_BITMAP_PROPERTIES, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_HWND_RENDER_TARGET_PROPERTIES,
     D2D1_PRESENT_OPTIONS_NONE, D2D1_RENDER_TARGET_PROPERTIES, D2D1CreateFactory, ID2D1Bitmap,
     ID2D1BitmapBrush, ID2D1Factory, ID2D1HwndRenderTarget,
 };
+use windows::Win32::Graphics::Direct2D::{D2D1_BITMAP_BRUSH_PROPERTIES, D2D1_EXTEND_MODE_WRAP};
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
 
@@ -110,12 +110,27 @@ impl D2DRenderer {
     pub fn draw(&mut self, image: Option<&DecodedImage>) {
         unsafe {
             self.render_target.BeginDraw();
+
+            // ファイルリストパネルの右側のみに描画を制限
+            // （D2DはGDIクリッピングをバイパスするため、パネル上に描画が被るのを防止）
+            let size = self.render_target.GetSize();
+            let has_clip = self.draw_offset_x > 0.0;
+            if has_clip {
+                let clip = D2D_RECT_F {
+                    left: self.draw_offset_x,
+                    top: 0.0,
+                    right: size.width,
+                    bottom: size.height,
+                };
+                self.render_target
+                    .PushAxisAlignedClip(&clip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+            }
+
             self.render_target.Clear(Some(&BG_COLOR));
 
             if let Some(img) = image
                 && let Ok(bitmap) = self.get_or_create_bitmap(img)
             {
-                let size = self.render_target.GetSize();
                 // パネル幅を差し引いた描画領域でレイアウト計算
                 let avail_width = size.width - self.draw_offset_x;
                 let mut draw_rect =
@@ -127,6 +142,10 @@ impl D2DRenderer {
                 // αチャネル背景を画像領域に描画
                 self.draw_alpha_background(&draw_rect);
                 self.draw_bitmap(&bitmap, &draw_rect);
+            }
+
+            if has_clip {
+                self.render_target.PopAxisAlignedClip();
             }
 
             // EndDrawのエラーはリカバリ不要（次フレームで再試行される）

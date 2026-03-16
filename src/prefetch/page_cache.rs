@@ -57,6 +57,12 @@ impl PageCache {
         self.cache.contains_key(&index)
     }
 
+    /// キャッシュ済みインデックスの一覧を返す
+    #[allow(dead_code)]
+    pub fn cached_indices(&self) -> Vec<usize> {
+        self.cache.keys().copied().collect()
+    }
+
     /// 指定範囲外のエントリを全削除
     pub fn evict_outside(&mut self, center: usize, range_back: usize, range_fwd: usize) {
         let low = center.saturating_sub(range_back);

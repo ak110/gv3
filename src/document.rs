@@ -559,6 +559,13 @@ impl Document {
         self.decoder.metadata(&data, filename_hint)
     }
 
+    /// 指定インデックスの画像がキャッシュ済みか判定する
+    /// current_imageとして保持中の画像も「キャッシュ済み」として扱う
+    pub fn is_cached(&self, index: usize) -> bool {
+        self.cache.contains(index)
+            || (self.file_list.current_index() == Some(index) && self.current_image.is_some())
+    }
+
     /// ファイルリストへの可変参照（app.rsのファイル操作用）
     #[allow(dead_code)]
     pub fn file_list_mut(&mut self) -> &mut FileList {

@@ -388,6 +388,7 @@ dependencies = [
  "image",
  "libloading",
  "natord",
+ "png",
  "serde",
  "sevenz-rust",
  "thiserror",

@@ -1,3 +1,5 @@
+use std::io::Cursor;
+
 use anyhow::Context as _;
 
 use super::{DecodedImage, ImageDecoder, ImageMetadata};
@@ -43,12 +45,50 @@ impl ImageDecoder for StandardDecoder {
         // サイズ取得のためにデコード（ヘッダだけ読むAPIが限定的なため）
         let img = image::load_from_memory(data).context("メタデータの取得に失敗")?;
 
+        // PNGのテキストチャンク（tEXt/zTXt/iTXt）を取得
+        let comments = if matches!(image::guess_format(data), Ok(image::ImageFormat::Png)) {
+            Self::read_png_text_chunks(data)
+        } else {
+            Vec::new()
+        };
+
         Ok(ImageMetadata {
             width: img.width(),
             height: img.height(),
             format,
-            comments: Vec::new(),
+            comments,
         })
+    }
+}
+
+impl StandardDecoder {
+    /// PNGのテキストチャンク（tEXt/zTXt/iTXt）を読み取る
+    fn read_png_text_chunks(data: &[u8]) -> Vec<String> {
+        let decoder = png::Decoder::new(Cursor::new(data));
+        let Ok(reader) = decoder.read_info() else {
+            return Vec::new();
+        };
+        let info = reader.info();
+        let mut texts = Vec::new();
+
+        // tEXt（非圧縮Latin-1テキスト）
+        for chunk in &info.uncompressed_latin1_text {
+            texts.push(format!("{}: {}", chunk.keyword, chunk.text));
+        }
+        // zTXt（圧縮Latin-1テキスト）
+        for chunk in &info.compressed_latin1_text {
+            if let Ok(text) = chunk.get_text() {
+                texts.push(format!("{}: {}", chunk.keyword, text));
+            }
+        }
+        // iTXt（国際化テキスト、UTF-8）
+        for chunk in &info.utf8_text {
+            if let Ok(text) = chunk.get_text() {
+                texts.push(format!("{}: {}", chunk.keyword, text));
+            }
+        }
+
+        texts
     }
 }
 
@@ -104,6 +144,24 @@ mod tests {
         assert!(meta.format.contains("Png"));
     }
 
+    #[test]
+    fn metadata_png_with_text_chunks() {
+        // tEXtチャンク付きPNGを生成
+        let png_data = create_1x1_png_with_text();
+        let decoder = StandardDecoder::new();
+        let meta = decoder.metadata(&png_data, "test.png").unwrap();
+        assert!(
+            meta.comments.iter().any(|c| c.contains("Author")),
+            "tEXtチャンクが取得できること: {:?}",
+            meta.comments
+        );
+        assert!(
+            meta.comments.iter().any(|c| c.contains("TestAuthor")),
+            "tEXtチャンクの値が正しいこと: {:?}",
+            meta.comments
+        );
+    }
+
     /// テスト用: 1x1 白ピクセルのPNGバイナリを生成
     fn create_1x1_white_png() -> Vec<u8> {
         use image::{ImageBuffer, Rgba};
@@ -112,5 +170,22 @@ mod tests {
         let mut buf = std::io::Cursor::new(Vec::new());
         img.write_to(&mut buf, image::ImageFormat::Png).unwrap();
         buf.into_inner()
+    }
+
+    /// テスト用: tEXtチャンク付き1x1 PNGバイナリを生成
+    fn create_1x1_png_with_text() -> Vec<u8> {
+        let mut buf = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(std::io::Cursor::new(&mut buf), 1, 1);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            // tEXtチャンクを追加
+            let text_chunk =
+                png::text_metadata::TEXtChunk::new("Author".to_string(), "TestAuthor".to_string());
+            encoder.add_text_chunk(text_chunk.keyword, text_chunk.text);
+            let mut writer = encoder.write_header().unwrap();
+            writer.write_image_data(&[255, 255, 255, 255]).unwrap();
+        }
+        buf
     }
 }

@@ -20,7 +20,9 @@ use crate::render::layout::DisplayMode;
 use crate::susie::SusieManager;
 use crate::ui::cursor_hider::{CursorHider, TIMER_ID_CURSOR_HIDE};
 use crate::ui::file_list_panel::FileListPanel;
+use crate::ui::font::MonospaceFont;
 use crate::ui::fullscreen::FullscreenState;
+use crate::ui::info_dialog;
 use crate::ui::key_config::{
     Action, InputChord, KeyConfig, Modifiers, MouseButton, WheelDirection,
 };
@@ -50,6 +52,8 @@ pub struct AppWindow {
     menu_visible: bool,
     // ファイルリストパネル
     file_list_panel: FileListPanel,
+    // 等幅フォント（ダイアログ・ファイルリスト用）
+    monospace_font: MonospaceFont,
 }
 
 impl AppWindow {
@@ -139,6 +143,17 @@ impl AppWindow {
         // ファイルリストパネル作成（初期状態は非表示）
         let file_list_panel = FileListPanel::create(hwnd);
 
+        // 等幅フォント作成 + ファイルリストに適用
+        let monospace_font = MonospaceFont::new(16);
+        unsafe {
+            let _ = SendMessageW(
+                file_list_panel.listbox_hwnd(),
+                WM_SETFONT,
+                Some(WPARAM(monospace_font.hfont().0 as usize)),
+                Some(LPARAM(1)),
+            );
+        }
+
         let mut app = Box::new(Self {
             hwnd,
             document,
@@ -151,6 +166,7 @@ impl AppWindow {
             menu: menu_handle,
             menu_visible: false,
             file_list_panel,
+            monospace_font,
         });
 
         // GWLP_USERDATAにポインタを格納（WndProcからアクセスするため）
@@ -233,11 +249,24 @@ impl AppWindow {
                     self.file_list_panel.set_selection(index);
                 }
                 DocumentEvent::FileListChanged => {
-                    self.file_list_panel.update(self.document.file_list());
+                    let doc = &self.document;
+                    self.file_list_panel
+                        .update(doc.file_list(), |i| doc.is_cached(i));
                 }
                 DocumentEvent::Error(msg) => {
                     eprintln!("エラー: {msg}");
                 }
+            }
+        }
+
+        // ファイルリストパネルが表示中なら、キャッシュ状態をリアルタイム反映
+        if self.file_list_panel.is_visible() {
+            let doc = &self.document;
+            self.file_list_panel
+                .update(doc.file_list(), |i| doc.is_cached(i));
+            // 選択位置を復元
+            if let Some(idx) = self.document.file_list().current_index() {
+                self.file_list_panel.set_selection(idx);
             }
         }
     }
@@ -1107,24 +1136,12 @@ impl AppWindow {
         if let Ok(metadata) = self.document.current_metadata() {
             info_lines.push(format!("フォーマット: {}", metadata.format));
             for comment in &metadata.comments {
-                info_lines.push(format!("コメント: {comment}"));
+                info_lines.push(comment.clone());
             }
         }
 
         let text = info_lines.join("\n");
-        let title = "画像情報\0";
-        let text_nul = format!("{text}\0");
-        let wide_title: Vec<u16> = title.encode_utf16().collect();
-        let wide_text: Vec<u16> = text_nul.encode_utf16().collect();
-
-        unsafe {
-            MessageBoxW(
-                Some(self.hwnd),
-                windows::core::PCWSTR(wide_text.as_ptr()),
-                windows::core::PCWSTR(wide_title.as_ptr()),
-                MB_OK | MB_ICONINFORMATION,
-            );
-        }
+        info_dialog::show_info_dialog(self.hwnd, "画像情報", &text, self.monospace_font.hfont());
     }
 
     /// ヘルプを表示する
@@ -1152,20 +1169,14 @@ F1                  このヘルプ
 【対応フォーマット】
 画像: JPEG, PNG, GIF, BMP, WebP
 アーカイブ: ZIP/cbz, RAR/cbr, 7z
-Susieプラグイン (.sph/.spi) で拡張可能\0";
+Susieプラグイン (.sph/.spi) で拡張可能";
 
-        let title = "ぐらびゅ3 ヘルプ\0";
-        let wide_text: Vec<u16> = text.encode_utf16().collect();
-        let wide_title: Vec<u16> = title.encode_utf16().collect();
-
-        unsafe {
-            MessageBoxW(
-                Some(self.hwnd),
-                windows::core::PCWSTR(wide_text.as_ptr()),
-                windows::core::PCWSTR(wide_title.as_ptr()),
-                MB_OK | MB_ICONINFORMATION,
-            );
-        }
+        info_dialog::show_info_dialog(
+            self.hwnd,
+            "ぐらびゅ3 ヘルプ",
+            text,
+            self.monospace_font.hfont(),
+        );
     }
 
     fn on_drop_files(&mut self, hdrop: HDROP) {

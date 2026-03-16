@@ -98,16 +98,16 @@ impl FileListPanel {
     }
 
     /// ファイルリストの内容で ListBox を更新
-    pub fn update(&self, file_list: &FileList) {
+    /// `is_cached`: 各インデックスのキャッシュ状態を返すクロージャ
+    pub fn update(&self, file_list: &FileList, is_cached: impl Fn(usize) -> bool) {
         unsafe {
             SendMessageW(self.listbox, LB_RESETCONTENT, None, None);
 
-            for info in file_list.files() {
-                let label = if info.marked {
-                    format!("\u{2605} {}\0", info.file_name) // ★ プレフィックス
-                } else {
-                    format!("{}\0", info.file_name)
-                };
+            for (i, info) in file_list.files().iter().enumerate() {
+                // マーク: ★、キャッシュ: ● (済) / ○ (未)
+                let mark = if info.marked { "\u{2605}" } else { "\u{3000}" }; // ★ or 全角スペース
+                let cache = if is_cached(i) { "\u{25CF}" } else { "\u{25CB}" }; // ● or ○
+                let label = format!("{mark}{cache} {}\0", info.file_name);
                 let wide: Vec<u16> = label.encode_utf16().collect();
                 SendMessageW(
                     self.listbox,
