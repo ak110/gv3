@@ -1,5 +1,6 @@
 {
   "private": true,
+  "packageManager": "pnpm@9.15.4",
   "scripts": {
     "textlint": "textlint docs/*.md README.md",
     "textlint:fix": "textlint --fix docs/*.md README.md",
