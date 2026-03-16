@@ -113,6 +113,7 @@ pub fn build_menu_bar() -> HMENU {
         // ヘルプ(&H)
         let help_menu = create_popup(&[
             Some((Action::ShowHelp, "ヘルプ\tF1")),
+            Some((Action::CheckUpdate, "アップデートを確認...")),
             None,
             Some((Action::OpenExeFolder, "実行ファイルのフォルダ\tShift+M")),
             Some((
@@ -277,5 +278,6 @@ const ALL_ACTIONS: &[Action] = &[
     Action::OpenSpiFolder,
     Action::OpenTempFolder,
     Action::ShowHelp,
+    Action::CheckUpdate,
     Action::Exit,
 ];

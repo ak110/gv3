@@ -161,7 +161,14 @@ impl Document {
 
         for idx in indices {
             if !self.cache.contains(idx) {
-                prefetch.request_load(idx, files[idx].path.clone());
+                let pdf_page = match &files[idx].source {
+                    FileSource::PdfPage {
+                        pdf_path,
+                        page_index,
+                    } => Some((pdf_path.clone(), *page_index)),
+                    _ => None,
+                };
+                prefetch.request_load(idx, files[idx].path.clone(), pdf_page);
             }
         }
     }
@@ -176,9 +183,14 @@ impl Document {
     }
 
     /// ファイルを開く（親フォルダの画像を列挙し、指定ファイルを表示）
-    /// アーカイブファイルの場合はアーカイブとして開く
+    /// PDF/アーカイブファイルの場合はそれぞれの専用パスで開く
     pub fn open(&mut self, path: &Path) -> Result<()> {
         let path = Self::canonicalize(path)?;
+
+        // PDF判定
+        if Self::is_pdf(&path) {
+            return self.open_pdf(&path);
+        }
 
         // アーカイブ判定
         if self.archive_manager.is_archive(&path) {
@@ -263,6 +275,47 @@ impl Document {
         self.load_current()
     }
 
+    /// PDFファイルを開く（遅延レンダリング方式）
+    fn open_pdf(&mut self, pdf_path: &Path) -> Result<()> {
+        self.cleanup_archive_temp();
+        self.invalidate_cache();
+        self.file_list.clear();
+
+        let page_count = crate::pdf_renderer::get_pdf_page_count(pdf_path)?;
+        if page_count == 0 {
+            anyhow::bail!("PDFにページがありません");
+        }
+
+        // 各ページをFileInfoエントリとして登録（実ファイルは不要）
+        for i in 0..page_count {
+            let info = crate::file_info::FileInfo {
+                path: pdf_path.to_path_buf(),
+                source: FileSource::PdfPage {
+                    pdf_path: pdf_path.to_path_buf(),
+                    page_index: i,
+                },
+                file_name: format!("Page {:03}", i + 1),
+                file_size: 0,
+                modified: std::time::SystemTime::now(),
+                marked: false,
+                load_failed: false,
+            };
+            self.file_list.push(info);
+        }
+
+        // ページ順が自然順なのでソート不要
+        self.file_list.navigate_first();
+        let _ = self.event_sender.send(DocumentEvent::FileListChanged);
+        self.load_current()
+    }
+
+    /// PDFファイルかどうか判定する
+    fn is_pdf(path: &Path) -> bool {
+        path.extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("pdf"))
+    }
+
     /// アーカイブ用tempディレクトリをクリーンアップする
     fn cleanup_archive_temp(&mut self) {
         for temp_dir in self.archive_temp_dirs.drain(..) {
@@ -332,13 +385,26 @@ impl Document {
         }
 
         // 2. キャッシュミス → 同期デコード（フォールバック）
-        let path = self.file_list.current().unwrap().path.clone();
-        let data = std::fs::read(&path)
-            .with_context(|| format!("ファイル読み込み失敗: {}", path.display()))?;
+        let current = self.file_list.current().unwrap();
+        let path = current.path.clone();
+        let source = current.source.clone();
 
-        let filename_hint = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        let decode_result = if let FileSource::PdfPage {
+            pdf_path,
+            page_index,
+        } = &source
+        {
+            // PDFページ: 直接レンダリング
+            crate::pdf_renderer::render_pdf_page(pdf_path, *page_index)
+        } else {
+            // 通常ファイル: fs::read → decode
+            let data = std::fs::read(&path)
+                .with_context(|| format!("ファイル読み込み失敗: {}", path.display()))?;
+            let filename_hint = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            self.decoder.decode(&data, filename_hint)
+        };
 
-        match self.decoder.decode(&data, filename_hint) {
+        match decode_result {
             Ok(image) => {
                 self.current_image = Some(image);
                 let _ = self.event_sender.send(DocumentEvent::ImageReady);
@@ -393,6 +459,7 @@ impl Document {
     }
 
     /// 現在開いているアーカイブのパス一覧
+    #[allow(dead_code)]
     pub fn current_archives(&self) -> &[PathBuf] {
         &self.current_archives
     }
@@ -523,6 +590,39 @@ impl Document {
 
     /// ブックマークデータからファイルリストを復元する
     pub fn load_bookmark_data(&mut self, data: crate::bookmark::BookmarkData) -> Result<()> {
+        // PDFエントリがあればPDFモードで復元
+        let has_pdf = data
+            .entries
+            .iter()
+            .any(|s| matches!(s, FileSource::PdfPage { .. }));
+
+        if has_pdf {
+            // 最初のPDFパスを取得
+            let pdf_path = data
+                .entries
+                .iter()
+                .find_map(|s| {
+                    if let FileSource::PdfPage { pdf_path, .. } = s {
+                        Some(pdf_path.clone())
+                    } else {
+                        None
+                    }
+                })
+                .ok_or_else(|| anyhow::anyhow!("PDFパスが見つかりません"))?;
+
+            if !pdf_path.exists() {
+                anyhow::bail!("PDFファイルが見つかりません: {}", pdf_path.display());
+            }
+
+            self.open_pdf(&pdf_path)?;
+
+            // ブックマークのindex位置にナビゲート
+            let target_idx = data.index.min(self.file_list.len().saturating_sub(1));
+            self.file_list.navigate_to(target_idx);
+            let _ = self.load_current();
+            return Ok(());
+        }
+
         // アーカイブエントリが1つでもあればアーカイブモードで復元
         let has_archives = data
             .entries
@@ -600,12 +700,26 @@ impl Document {
 
     /// 現在のファイルのメタデータを取得する
     pub fn current_metadata(&self) -> Result<crate::image::ImageMetadata> {
-        let path = self
+        let current = self
             .file_list
             .current()
-            .map(|f| f.path.clone())
             .ok_or_else(|| anyhow::anyhow!("ファイルが選択されていません"))?;
 
+        // PDFページの場合はcurrent_imageからメタデータを生成
+        if matches!(current.source, FileSource::PdfPage { .. }) {
+            return if let Some(img) = &self.current_image {
+                Ok(crate::image::ImageMetadata {
+                    width: img.width,
+                    height: img.height,
+                    format: "PDF".to_string(),
+                    comments: Vec::new(),
+                })
+            } else {
+                anyhow::bail!("PDFページがまだレンダリングされていません")
+            };
+        }
+
+        let path = current.path.clone();
         let data = std::fs::read(&path)?;
         let filename_hint = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         self.decoder.metadata(&data, filename_hint)

@@ -12,6 +12,8 @@ pub enum FileSource {
     File(PathBuf),
     /// アーカイブ内のエントリ
     ArchiveEntry { archive: PathBuf, entry: String },
+    /// PDFのページ
+    PdfPage { pdf_path: PathBuf, page_index: u32 },
 }
 
 impl FileSource {
@@ -22,20 +24,37 @@ impl FileSource {
             FileSource::ArchiveEntry { archive, entry } => {
                 format!("{} > {}", archive.display(), entry)
             }
+            FileSource::PdfPage {
+                pdf_path,
+                page_index,
+            } => {
+                format!("{} > Page {}", pdf_path.display(), page_index + 1)
+            }
         }
     }
 
-    /// アーカイブパスを返す（アーカイブエントリの場合のみ）
+    /// アーカイブパスを返す（アーカイブエントリ/PDFの場合）
     pub fn archive_path(&self) -> Option<&Path> {
         match self {
             FileSource::ArchiveEntry { archive, .. } => Some(archive),
+            FileSource::PdfPage { pdf_path, .. } => Some(pdf_path),
             FileSource::File(_) => None,
         }
     }
 
     /// アーカイブエントリかどうか
+    #[allow(dead_code)]
     pub fn is_archive_entry(&self) -> bool {
         matches!(self, FileSource::ArchiveEntry { .. })
+    }
+
+    /// コンテナ内のエントリかどうか（アーカイブまたはPDF）
+    /// 破壊的ファイル操作（削除・移動等）のガードに使用
+    pub fn is_contained(&self) -> bool {
+        matches!(
+            self,
+            FileSource::ArchiveEntry { .. } | FileSource::PdfPage { .. }
+        )
     }
 }
 
@@ -120,6 +139,32 @@ mod tests {
         assert_eq!(source.display_path(), r"C:\archive.zip > folder/image.png");
         assert!(source.is_archive_entry());
         assert_eq!(source.archive_path().unwrap(), Path::new(r"C:\archive.zip"));
+    }
+
+    #[test]
+    fn pdf_page_source() {
+        let source = FileSource::PdfPage {
+            pdf_path: PathBuf::from(r"C:\docs\test.pdf"),
+            page_index: 2,
+        };
+        assert_eq!(source.display_path(), r"C:\docs\test.pdf > Page 3");
+        assert!(!source.is_archive_entry());
+        assert!(source.is_contained());
+        assert_eq!(
+            source.archive_path().unwrap(),
+            Path::new(r"C:\docs\test.pdf")
+        );
+
+        // File は is_contained() == false
+        let file_source = FileSource::File(PathBuf::from(r"C:\images\test.jpg"));
+        assert!(!file_source.is_contained());
+
+        // ArchiveEntry は is_contained() == true
+        let archive_source = FileSource::ArchiveEntry {
+            archive: PathBuf::from(r"C:\archive.zip"),
+            entry: "img.png".to_string(),
+        };
+        assert!(archive_source.is_contained());
     }
 
     #[test]

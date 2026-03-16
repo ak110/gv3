@@ -13,6 +13,8 @@ enum LoadRequest {
         index: usize,
         path: PathBuf,
         generation: u64,
+        /// PDFページの場合: (pdf_path, page_index)
+        pdf_page: Option<(PathBuf, u32)>,
     },
     Shutdown,
 }
@@ -70,11 +72,12 @@ impl PrefetchEngine {
     }
 
     /// 現在のgenerationを付与してロードリクエストを送信
-    pub fn request_load(&self, index: usize, path: PathBuf) {
+    pub fn request_load(&self, index: usize, path: PathBuf, pdf_page: Option<(PathBuf, u32)>) {
         let _ = self.request_tx.send(LoadRequest::Load {
             index,
             path,
             generation: self.generation,
+            pdf_page,
         });
     }
 
@@ -110,6 +113,30 @@ impl Drop for PrefetchEngine {
     }
 }
 
+/// COMの初期化/解放を管理するDropガード
+struct ComGuard;
+
+impl ComGuard {
+    fn init() -> Self {
+        unsafe {
+            // ワーカースレッドではMTAモードで初期化
+            let _ = windows::Win32::System::Com::CoInitializeEx(
+                None,
+                windows::Win32::System::Com::COINIT_MULTITHREADED,
+            );
+        }
+        Self
+    }
+}
+
+impl Drop for ComGuard {
+    fn drop(&mut self) {
+        unsafe {
+            windows::Win32::System::Com::CoUninitialize();
+        }
+    }
+}
+
 /// ワーカースレッドのメインループ
 fn worker_loop(
     request_rx: Receiver<LoadRequest>,
@@ -118,22 +145,25 @@ fn worker_loop(
     notify: Box<dyn Fn() + Send>,
     decoder: Arc<DecoderChain>,
 ) {
+    // PDFレンダリングにWinRT APIが必要なのでCOM初期化
+    let _com = ComGuard::init();
+
     while let Ok(request) = request_rx.recv() {
         match request {
             LoadRequest::Load {
                 index,
                 path,
                 generation,
+                pdf_page,
             } => {
                 // デコード前に世代チェック → 古いリクエストはスキップ
                 if generation < current_generation.load(Ordering::Relaxed) {
                     continue;
                 }
 
-                let filename_hint = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-
-                let response = match std::fs::read(&path) {
-                    Ok(data) => match decoder.decode(&data, filename_hint) {
+                let response = if let Some((pdf_path, page_index)) = pdf_page {
+                    // PDFページ: レンダリング
+                    match crate::pdf_renderer::render_pdf_page(&pdf_path, page_index) {
                         Ok(image) => LoadResponse::Loaded {
                             index,
                             image,
@@ -141,15 +171,32 @@ fn worker_loop(
                         },
                         Err(e) => LoadResponse::Failed {
                             index,
+                            error: format!("{} page {}: {}", pdf_path.display(), page_index + 1, e),
+                            generation,
+                        },
+                    }
+                } else {
+                    // 通常ファイル: fs::read → decode
+                    let filename_hint = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                    match std::fs::read(&path) {
+                        Ok(data) => match decoder.decode(&data, filename_hint) {
+                            Ok(image) => LoadResponse::Loaded {
+                                index,
+                                image,
+                                generation,
+                            },
+                            Err(e) => LoadResponse::Failed {
+                                index,
+                                error: format!("{}: {}", path.display(), e),
+                                generation,
+                            },
+                        },
+                        Err(e) => LoadResponse::Failed {
+                            index,
                             error: format!("{}: {}", path.display(), e),
                             generation,
                         },
-                    },
-                    Err(e) => LoadResponse::Failed {
-                        index,
-                        error: format!("{}: {}", path.display(), e),
-                        generation,
-                    },
+                    }
                 };
 
                 let _ = response_tx.send(response);
@@ -192,7 +239,7 @@ mod tests {
         }
 
         let engine = PrefetchEngine::new(Box::new(|| {}), test_decoder());
-        engine.request_load(0, path);
+        engine.request_load(0, path, None);
 
         // ワーカーの処理完了を待つ
         let mut loaded = false;
@@ -234,11 +281,11 @@ mod tests {
         let mut engine = PrefetchEngine::new(Box::new(|| {}), test_decoder());
 
         // generation=0でリクエストを送信する前に世代を進める
-        engine.request_load(0, path.clone());
+        engine.request_load(0, path.clone(), None);
         engine.advance_generation(); // → generation=1
 
         // generation=1で新しいリクエスト
-        engine.request_load(1, path);
+        engine.request_load(1, path, None);
 
         // 少し待ってレスポンスを収集
         std::thread::sleep(std::time::Duration::from_millis(200));
@@ -258,7 +305,7 @@ mod tests {
     #[test]
     fn failed_response_on_nonexistent_file() {
         let engine = PrefetchEngine::new(Box::new(|| {}), test_decoder());
-        engine.request_load(0, PathBuf::from("nonexistent_file_xyz.png"));
+        engine.request_load(0, PathBuf::from("nonexistent_file_xyz.png"), None);
 
         let mut failed = false;
         for _ in 0..100 {

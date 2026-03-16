@@ -25,6 +25,11 @@ windows = { version = "0.61", features = [
     "Win32_UI_Shell_Common",
     "Win32_System_DataExchange",
     "Win32_System_Ole",
+    "Win32_System_Threading",
+    "Storage",
+    "Storage_Streams",
+    "Data_Pdf",
+    "Foundation",
 ] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "bmp", "webp"] }
 png = "0.18"
@@ -38,6 +43,8 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 unrar = "0.5"
 sevenz-rust = { version = "0.6", features = ["bzip2", "zstd", "aes256"] }
 libloading = "0.8"
+ureq = "3"
+serde_json = "1"
 
 [build-dependencies]
 winres = "0.1"

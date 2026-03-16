@@ -11,11 +11,14 @@ mod file_info;
 mod file_list;
 mod file_ops;
 mod image;
+mod pdf_renderer;
 mod prefetch;
 mod render;
 mod shell;
 mod susie;
+mod temp_cleanup;
 mod ui;
+mod updater;
 
 use std::path::PathBuf;
 
@@ -46,6 +49,10 @@ fn main() -> Result<()> {
     unsafe {
         CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()?;
     }
+
+    // 起動時クリーンアップ
+    temp_cleanup::cleanup_orphaned_temp_dirs();
+    updater::cleanup_old_exe();
 
     // CLI分岐（--register / --unregister: COM初期化後に実行）
     if let Some(arg) = std::env::args().nth(1) {
@@ -79,7 +86,7 @@ fn print_help() {
     let version = env!("CARGO_PKG_VERSION");
     println!(
         "\
-ぐらびゅ3 v{version} - Windows用画像ビューア
+ぐらびゅ3 v{version} - Windows用画像ビューアー
 
 使い方:
   gv3.exe [オプション] [ファイルパス]
@@ -91,6 +98,7 @@ fn print_help() {
 
 対応フォーマット:
   画像:     JPEG, PNG, GIF, BMP, WebP
+  ドキュメント: PDF
   アーカイブ: ZIP/cbz, RAR/cbr, 7z
   ※ 64bit Susieプラグイン (.sph/.spi) で拡張可能
 

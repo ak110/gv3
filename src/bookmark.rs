@@ -56,6 +56,12 @@ pub fn save_bookmark(
             FileSource::ArchiveEntry { archive, entry } => {
                 content.push_str(&format!("archive\t{}\t{}\n", archive.display(), entry));
             }
+            FileSource::PdfPage {
+                pdf_path,
+                page_index,
+            } => {
+                content.push_str(&format!("pdf\t{}\t{}\n", pdf_path.display(), page_index));
+            }
         }
     }
 
@@ -112,6 +118,14 @@ fn parse_bookmark(content: &str) -> Result<BookmarkData> {
                     entry: entry.to_string(),
                 });
             }
+            ["pdf", pdf_path, page_index_str] => {
+                if let Ok(page_index) = page_index_str.parse::<u32>() {
+                    entries.push(FileSource::PdfPage {
+                        pdf_path: PathBuf::from(pdf_path),
+                        page_index,
+                    });
+                }
+            }
             _ => {
                 // 後方互換: タブ区切りでないパスは通常ファイルとして扱う
                 entries.push(FileSource::File(PathBuf::from(line)));
@@ -160,6 +174,24 @@ archive	C:\archive.zip	folder/image.png
             &data.entries[1],
             FileSource::ArchiveEntry { archive, entry }
             if archive == Path::new(r"C:\archive.zip") && entry == "folder/image.png"
+        ));
+    }
+
+    #[test]
+    fn parse_bookmark_with_pdf() {
+        let content = r#"# gv3 bookmark v1
+# index: 2
+pdf	C:\docs\test.pdf	0
+pdf	C:\docs\test.pdf	1
+pdf	C:\docs\test.pdf	2
+"#;
+        let data = parse_bookmark(content).unwrap();
+        assert_eq!(data.entries.len(), 3);
+        assert_eq!(data.index, 2);
+        assert!(matches!(
+            &data.entries[1],
+            FileSource::PdfPage { pdf_path, page_index }
+            if pdf_path == Path::new(r"C:\docs\test.pdf") && *page_index == 1
         ));
     }
 

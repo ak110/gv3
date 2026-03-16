@@ -749,9 +749,9 @@ impl AppWindow {
                 }
             }
             Action::DeleteFile => {
-                // アーカイブ内ファイルの削除は無効
+                // コンテナ内（アーカイブ/PDF）のファイル削除は無効
                 if let Some(source) = self.document.current_source()
-                    && source.is_archive_entry()
+                    && source.is_contained()
                 {
                     return;
                 }
@@ -764,7 +764,7 @@ impl AppWindow {
             }
             Action::MoveFile => {
                 if let Some(source) = self.document.current_source()
-                    && source.is_archive_entry()
+                    && source.is_contained()
                 {
                     return;
                 }
@@ -792,8 +792,10 @@ impl AppWindow {
                 }
             }
             Action::MarkedDelete => {
-                // アーカイブ内は無効
-                if !self.document.current_archives().is_empty() {
+                // コンテナ内（アーカイブ/PDF）は無効
+                if let Some(source) = self.document.current_source()
+                    && source.is_contained()
+                {
                     return;
                 }
                 let paths: Vec<std::path::PathBuf> = self
@@ -810,7 +812,9 @@ impl AppWindow {
                 }
             }
             Action::MarkedMove => {
-                if !self.document.current_archives().is_empty() {
+                if let Some(source) = self.document.current_source()
+                    && source.is_contained()
+                {
                     return;
                 }
                 let paths: Vec<std::path::PathBuf> = self
@@ -927,11 +931,14 @@ impl AppWindow {
                 // 現在のexeを新規プロセスで起動
                 if let Ok(exe) = std::env::current_exe() {
                     let mut cmd = std::process::Command::new(&exe);
-                    // アーカイブ内の場合はアーカイブパスを渡す
+                    // コンテナ内の場合はコンテナパスを渡す
                     if let Some(source) = self.document.current_source() {
                         match source {
                             crate::file_info::FileSource::ArchiveEntry { archive, .. } => {
                                 cmd.arg(archive);
+                            }
+                            crate::file_info::FileSource::PdfPage { pdf_path, .. } => {
+                                cmd.arg(pdf_path);
                             }
                             crate::file_info::FileSource::File(path) => {
                                 cmd.arg(path);
@@ -951,6 +958,7 @@ impl AppWindow {
                         crate::file_info::FileSource::ArchiveEntry { archive, .. } => {
                             archive.clone()
                         }
+                        crate::file_info::FileSource::PdfPage { pdf_path, .. } => pdf_path.clone(),
                         crate::file_info::FileSource::File(path) => path.clone(),
                     };
                     // /select,path でエクスプローラを開く
@@ -1052,6 +1060,11 @@ impl AppWindow {
             // --- ヘルプ ---
             Action::ShowHelp => {
                 self.show_help();
+            }
+
+            // --- アップデート ---
+            Action::CheckUpdate => {
+                self.check_for_update();
             }
 
             // --- 終了 ---
@@ -1167,7 +1180,7 @@ impl AppWindow {
     /// ヘルプを表示する
     fn show_help(&self) {
         let text = "\
-ぐらびゅ3 - Windows用画像ビューア
+ぐらびゅ3 - Windows用画像ビューアー
 
 【主要キーバインド】
 ← / →              前後の画像に移動
@@ -1188,6 +1201,7 @@ F1                  このヘルプ
 
 【対応フォーマット】
 画像: JPEG, PNG, GIF, BMP, WebP
+ドキュメント: PDF
 アーカイブ: ZIP/cbz, RAR/cbr, 7z
 Susieプラグイン (.sph/.spi) で拡張可能";
 
@@ -1197,6 +1211,102 @@ Susieプラグイン (.sph/.spi) で拡張可能";
             text,
             self.monospace_font.hfont(),
         );
+    }
+
+    /// アップデート確認・実行
+    fn check_for_update(&mut self) {
+        // WaitCursor表示
+        let prev_cursor = unsafe { SetCursor(LoadCursorW(None, IDC_WAIT).ok()) };
+
+        let result = crate::updater::check_for_update();
+
+        // カーソル復元
+        unsafe {
+            let _ = SetCursor(Some(prev_cursor));
+        }
+
+        match result {
+            Err(e) => {
+                let msg = format!("更新の確認に失敗しました:\n{e}\0");
+                let title = "アップデート確認\0";
+                let wide_msg: Vec<u16> = msg.encode_utf16().collect();
+                let wide_title: Vec<u16> = title.encode_utf16().collect();
+                unsafe {
+                    MessageBoxW(
+                        Some(self.hwnd),
+                        windows::core::PCWSTR(wide_msg.as_ptr()),
+                        windows::core::PCWSTR(wide_title.as_ptr()),
+                        MB_OK | MB_ICONERROR,
+                    );
+                }
+            }
+            Ok(info) if !info.is_newer => {
+                let msg = format!("最新バージョンです (v{})\0", info.current_version);
+                let title = "アップデート確認\0";
+                let wide_msg: Vec<u16> = msg.encode_utf16().collect();
+                let wide_title: Vec<u16> = title.encode_utf16().collect();
+                unsafe {
+                    MessageBoxW(
+                        Some(self.hwnd),
+                        windows::core::PCWSTR(wide_msg.as_ptr()),
+                        windows::core::PCWSTR(wide_title.as_ptr()),
+                        MB_OK | MB_ICONINFORMATION,
+                    );
+                }
+            }
+            Ok(info) => {
+                let msg = format!(
+                    "v{} が利用可能です（現在: v{}）。\n更新しますか？\0",
+                    info.latest_version, info.current_version
+                );
+                let title = "アップデート確認\0";
+                let wide_msg: Vec<u16> = msg.encode_utf16().collect();
+                let wide_title: Vec<u16> = title.encode_utf16().collect();
+                let answer = unsafe {
+                    MessageBoxW(
+                        Some(self.hwnd),
+                        windows::core::PCWSTR(wide_msg.as_ptr()),
+                        windows::core::PCWSTR(wide_title.as_ptr()),
+                        MB_YESNO | MB_ICONQUESTION,
+                    )
+                };
+
+                if answer == IDYES {
+                    // WaitCursor表示
+                    let prev = unsafe { SetCursor(LoadCursorW(None, IDC_WAIT).ok()) };
+
+                    match crate::updater::perform_update(&info) {
+                        Ok(true) => {
+                            // バッチスクリプト起動成功 → アプリ終了
+                            unsafe {
+                                let _ = SetCursor(Some(prev));
+                                let _ = DestroyWindow(self.hwnd);
+                            }
+                        }
+                        Ok(false) => unsafe {
+                            let _ = SetCursor(Some(prev));
+                        },
+                        Err(e) => {
+                            unsafe {
+                                let _ = SetCursor(Some(prev));
+                            }
+                            let msg = format!("更新に失敗しました:\n{e}\0");
+                            let title = "アップデート\0";
+                            let wide_msg: Vec<u16> = msg.encode_utf16().collect();
+                            let wide_title: Vec<u16> = title.encode_utf16().collect();
+                            unsafe {
+                                MessageBoxW(
+                                    Some(self.hwnd),
+                                    windows::core::PCWSTR(wide_msg.as_ptr()),
+                                    windows::core::PCWSTR(wide_title.as_ptr()),
+                                    MB_OK | MB_ICONERROR,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     fn on_drop_files(&mut self, hdrop: HDROP) {

@@ -343,6 +343,7 @@ impl FileList {
     fn group_key(info: &FileInfo) -> GroupKey {
         match &info.source {
             FileSource::ArchiveEntry { archive, .. } => GroupKey::Archive(archive.clone()),
+            FileSource::PdfPage { pdf_path, .. } => GroupKey::Archive(pdf_path.clone()),
             FileSource::File(_) => GroupKey::Folder(
                 info.path
                     .parent()
