@@ -16,20 +16,23 @@ gv3/
 │   ├── file_list.rs            # FileList: ファイル一覧管理、ソート、シャッフル
 │   ├── file_info.rs            # FileInfo: 個々のファイル情報（パス、サイズ、マーク状態等）
 │   ├── config.rs               # Config: TOML設定管理
+│   ├── extension_registry.rs   # ExtensionRegistry: 対応拡張子の管理（Susie動的登録含む）
+│   ├── bookmark.rs             # ブックマーク保存/復元
+│   ├── clipboard.rs            # Win32クリップボード操作（テキスト・画像）
+│   ├── file_ops.rs             # Shell APIによるファイル操作・ダイアログ
 │   │
 │   ├── prefetch/               # 先読みエンジン
 │   │   ├── mod.rs
-│   │   ├── page_cache.rs       # リングバッファキャッシュ
-│   │   └── loader_thread.rs    # ワーカースレッド
+│   │   ├── page_cache.rs       # HashMap + メモリ予算によるキャッシュ
+│   │   └── loader_thread.rs    # ワーカースレッド（世代管理付き）
 │   │
 │   ├── image/                  # 画像デコーダ
-│   │   ├── mod.rs              # trait ImageDecoder
+│   │   ├── mod.rs              # trait ImageDecoder, DecoderChain
 │   │   ├── standard.rs         # image crate による標準デコード (JPEG/PNG/GIF/BMP/WebP)
-│   │   ├── turbojpeg.rs        # libjpeg-turbo による高速JPEGデコード
 │   │   └── susie.rs            # Susieプラグイン画像デコーダ
 │   │
 │   ├── archive/                # アーカイブハンドラ
-│   │   ├── mod.rs              # trait ArchiveHandler
+│   │   ├── mod.rs              # trait ArchiveHandler, ArchiveManager
 │   │   ├── zip.rs              # ZIP/cbz
 │   │   ├── rar.rs              # RAR/cbr
 │   │   ├── sevenz.rs           # 7z
@@ -37,21 +40,24 @@ gv3/
 │   │
 │   ├── render/                 # 描画エンジン
 │   │   ├── mod.rs
-│   │   ├── d2d_renderer.rs     # Direct2D描画
-│   │   └── layout.rs           # 表示モード(自動縮小/拡大/原寸大/固定倍率)
+│   │   ├── d2d_renderer.rs     # Direct2D描画、ビットマップキャッシュ
+│   │   └── layout.rs           # 表示モード計算（AutoShrink/AutoFit/AutoEnlarge/Original）
 │   │
 │   ├── ui/                     # UI関連
 │   │   ├── mod.rs
-│   │   ├── window.rs           # Win32ウィンドウラッパー
+│   │   ├── window.rs           # Win32ウィンドウ基本操作
 │   │   ├── fullscreen.rs       # フルスクリーン/全画面切替
-│   │   ├── key_config.rs       # キーバインド設定
-│   │   ├── menu.rs             # メニューバー
-│   │   ├── dialogs.rs          # 各種ダイアログ（ファイル選択、設定等）
-│   │   ├── file_list_window.rs # ファイルリストウィンドウ
+│   │   ├── key_config.rs       # キーバインド設定、アクション定義
 │   │   └── cursor_hider.rs     # フルスクリーン時カーソル自動非表示
 │   │
+│   ├── susie/                  # Susieプラグインシステム（64bit対応）
+│   │   ├── mod.rs              # SusieManager: プラグイン検出・ロード・管理
+│   │   ├── plugin.rs           # SusiePlugin: DLLラッパー・FFI呼び出し
+│   │   ├── ffi.rs              # Susie FFI型定義（stdcall）
+│   │   └── util.rs             # DIB→RGBA変換、CP932エンコーディング、メモリ管理
+│   │
 │   └── shell/                  # シェル統合
-│       ├── mod.rs
+│       ├── mod.rs              # register_all / unregister_all
 │       ├── association.rs      # ファイル関連付け登録
 │       ├── context_menu.rs     # 右クリックメニュー登録
 │       └── sendto.rs           # 「送る」登録
@@ -59,13 +65,8 @@ gv3/
 
 ## アーキテクチャパターン: Model-View (MV) 分離
 
-ぐらびゅ2の `CDocument` (IDocView経由) → `CAppWindow` パターンを踏襲する。
-WPF的なMVVMは、Win32メッセージベースのアプリには過剰であるため採用しない。
-
-### 通信方式
-
-ぐらびゅ2ではコールバックインターフェース (`IDocView`) を使っていたが、
-ぐらびゅ3ではRustのチャネルで疎結合化する。
+Win32メッセージベースのアプリケーションにはMVVMは過剰であるため、シンプルなMV分離を採用。
+Rustのチャネルで疎結合化している。
 
 ```
 ┌─────────────────────────────────────────────────┐
@@ -103,8 +104,6 @@ enum DocumentEvent {
 
 ## 先読みエンジン設計
 
-ぐらびゅ2の `PageLoaderBase` + `ThreadedImageLoader` の設計を踏襲する。
-
 ### リングバッファキャッシュ
 
 ```
@@ -114,7 +113,6 @@ enum DocumentEvent {
 ```
 
 - キャッシュサイズ（前方N枚 + 後方M枚）は利用可能メモリに基づいて動的に決定
-- ぐらびゅ2の `GetNowFreeMemory()` 相当の処理でシステムメモリ残量を取得
 - ベースサイズ（デフォルト 1024×1536）の画像を基準にキャッシュ可能枚数を計算
 
 ### ワーカースレッド
@@ -137,7 +135,7 @@ enum DocumentEvent {
 
 - `crossbeam-channel` でリクエストキューを実装
 - 優先度付きロード: 現在ページ > 次ページ > 前ページ > 遠いページ
-- ナビゲーション時に不要なリクエストをキャンセル
+- ナビゲーション時に不要なリクエストをキャンセル（世代管理）
 
 ### キャッシュデータ構造
 
@@ -158,8 +156,6 @@ struct PageCache {
 
 ## 画像デコーダ設計
 
-ぐらびゅ2の Factory パターン (`IImageLoader` + `CJpgLoaderFactory` 等) をRustのtraitで置き換える。
-
 ```rust
 trait ImageDecoder: Send + Sync {
     /// このデコーダが対応する拡張子のリスト
@@ -176,10 +172,9 @@ trait ImageDecoder: Send + Sync {
 }
 ```
 
-デコーダ登録:
-1. StandardDecoder (`image` crate) — JPEG/PNG/GIF/BMP/WebP/TIFF/TGA/ICO
-2. TurboJpegDecoder (`turbojpeg` crate) — JPEG高速デコード（StandardDecoderより優先）
-3. SusieDecoder (`libloading`) — Susieプラグインからの動的登録
+デコーダ登録（DecoderChain — 先に登録されたものが優先）:
+1. StandardDecoder (`image` crate) — JPEG/PNG/GIF/BMP/WebP
+2. SusieDecoder (`libloading`) — Susieプラグインからの動的登録
 
 ## アーカイブハンドラ設計
 
@@ -204,8 +199,6 @@ struct ArchiveEntry {
 
 ## Susieプラグインシステム
 
-ぐらびゅ2の `CSpi` クラスの設計を移植する。
-
 ```rust
 struct SusiePlugin {
     _lib: libloading::Library,
@@ -223,7 +216,7 @@ struct SusieManager {
 }
 ```
 
-- `$AppDir\spi\` からDLLを列挙して自動ロード
+- exeと同階層の `spi/` からDLLを列挙して自動ロード
 - 画像プラグインとアーカイブプラグインを `GetPluginInfo` の戻り値で区別
 - ロード順・優先度は設定ファイルで制御
 
@@ -233,9 +226,9 @@ struct SusieManager {
 # gv3.toml
 
 [display]
-auto_scale = "shrink"          # shrink | shrink_and_enlarge | enlarge | original | fixed
+auto_scale = "shrink"          # shrink | shrink_and_enlarge | enlarge | original
 fixed_scale = 1.0
-margin = 0
+margin = 20.0
 alpha_background = "checker"   # white | black | checker
 
 [prefetch]
@@ -243,7 +236,7 @@ cache_base_width = 1024
 cache_base_height = 1536
 
 [list]
-default_sort = "name"          # name | name_nocase | folder | folder_nocase | size | date | natural
+default_sort = "name"          # name | name_nocase | size | date | natural
 
 [window]
 remember_position = true
@@ -252,60 +245,6 @@ always_on_top = false
 
 [susie]
 plugin_dir = "spi"
-# プラグイン優先度（上が高優先）
 image_plugins = []
 archive_plugins = []
 ```
-
-## 実装フェーズ
-
-### Phase 1: 基盤 — Win32ウィンドウ + 画像表示
-- Win32ウィンドウの作成、メッセージループ
-- Direct2D初期化、画像のデコードと描画
-- コマンドライン引数による画像表示
-
-### Phase 2: ファイルリスト + ナビゲーション
-- フォルダ内画像の列挙
-- FileList実装（ソート、フィルタ）
-- キーボードナビゲーション（←→, PageUp/Down等）
-- D&D対応
-
-### Phase 3: 先読みエンジン
-- ワーカースレッド + リングバッファキャッシュ
-- メモリ残量に基づくキャッシュサイズ動的調整
-- ナビゲーション時のキャッシュ更新・キャンセル
-
-### Phase 4: アーカイブ対応
-- ZIP/cbz サポート
-- RAR/cbr サポート
-- 7z サポート
-- アーカイブ内ナビゲーション
-
-### Phase 5: ウィンドウ・表示機能
-- フルスクリーン/全画面切替
-- 表示モード（自動縮小/拡大/原寸大/固定倍率）
-- 余白設定
-- αチャネル背景色切替
-- カーソル自動非表示
-
-### Phase 6: Susieプラグイン
-- DLL動的ロード
-- 画像プラグインのImageDecoder実装
-- アーカイブプラグインのArchiveHandler実装
-- プラグイン設定
-
-### Phase 7: 設定・キーバインド・シェル統合
-- TOML設定ファイル読み書き
-- キーバインドのカスタマイズ
-- ファイル関連付け登録
-- 右クリックメニュー登録
-- 「送る」登録
-- 設定ダイアログ
-
-### Phase 8: ファイル操作・マーク・ブックマーク
-- ファイルのコピー/移動/削除（Shell API経由）
-- マーク機能（設定/解除/反転/一括操作）
-- ブックマーク保存/復元
-- 画像の書き出し（JPG/BMP/PNG）
-- 画像情報表示
-- クリップボード操作

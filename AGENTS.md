@@ -62,6 +62,7 @@
 
 ## 関連ドキュメント
 
+- @README.md
 - @docs/concept.md
 - @docs/features.md
 - @docs/architecture.md
