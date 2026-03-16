@@ -1,0 +1,103 @@
+# ぐらびゅ3 キーバインド設定ファイル
+# このファイルを gv3.keys.toml にリネームして使用してください。
+# 未指定の操作はデフォルトバインドが使われます。
+#
+# キー名の記法:
+#   修飾キー: Ctrl+, Shift+, Alt+ （組み合わせ可）
+#   矢印: ←, →, ↑, ↓ または Left, Right, Up, Down
+#   テンキー: Num0〜Num9, Num +, Num -, Num *, Num /
+#   特殊キー: Enter, Space, Tab, Esc, BackSpace, Delete, Home, End, PageUp, PageDown
+#   ファンクション: F1〜F12
+#   英数字: A〜Z, 0〜9
+#   ホイール: WheelUp, WheelDown
+#   マウス: LeftDoubleClick, MiddleClick
+#   複数割り当て: カンマ区切り（例: "Ctrl+Num -, Ctrl+WheelUp"）
+
+[navigation]
+back = "←"
+forward = "→"
+navigate_1_back = "Shift+←"
+navigate_1_forward = "Shift+→"
+navigate_5_back = "PageUp"
+navigate_5_forward = "PageDown"
+navigate_50_back = "Ctrl+PageUp"
+navigate_50_forward = "Ctrl+PageDown"
+navigate_first = "Ctrl+Home"
+navigate_last = "Ctrl+End"
+navigate_prev_folder = "Shift+PageUp"
+navigate_next_folder = "Shift+PageDown"
+navigate_prev_mark = "Ctrl+Shift+←"
+navigate_next_mark = "Ctrl+Shift+→"
+navigate_to_page = "Ctrl+Space"
+sort_navigate_back = "Shift+Tab"
+sort_navigate_forward = "Tab"
+
+[display]
+auto_shrink = "Num /"
+auto_fit = "Num *"
+zoom_out = "Ctrl+Num -, Ctrl+WheelUp"
+zoom_in = "Ctrl+Num +, Ctrl+WheelDown"
+zoom_reset = "Ctrl+Num0"
+toggle_margin = "Num0"
+cycle_alpha_background = "A"
+
+[window]
+toggle_fullscreen = "Alt+Enter"
+minimize = "Ctrl+X"
+toggle_maximize = "LeftDoubleClick"
+toggle_cursor_hide = "Num -"
+toggle_menu_bar = "Esc"
+
+[file]
+new_window = "Ctrl+N"
+open_file = "Ctrl+O"
+open_folder = "Ctrl+Shift+O"
+open_history = "Ctrl+H"
+close_all = "Ctrl+W"
+reload = "F5"
+remove_from_list = "BackSpace"
+delete_file = "Shift+Delete"
+move_file = "Ctrl+R"
+copy_file = "Ctrl+S"
+open_containing_folder = "Ctrl+D"
+copy_filename = "Ctrl+F"
+copy_image = "Ctrl+C"
+paste_image = "Ctrl+V"
+export_jpg = "Ctrl+J"
+export_bmp = "Ctrl+B"
+export_png = "Ctrl+P"
+show_image_info = "MiddleClick"
+
+[mark]
+set = "Delete"
+unset = "Ctrl+Delete"
+invert_all = "Ctrl+Shift+I"
+marked_remove_from_list = "Ctrl+BackSpace"
+marked_delete = "Ctrl+Shift+Delete"
+marked_move = "Ctrl+Shift+M"
+marked_copy = "Ctrl+Shift+C"
+
+[bookmark]
+bookmark_save = "F9"
+bookmark_load = "F12"
+bookmark_open_editor = "F11"
+
+[list]
+toggle_file_list = "F4"
+
+[dialog]
+dialog_display = "C"
+dialog_image = "G"
+dialog_draw = "D"
+dialog_list = "L"
+dialog_general = "O"
+dialog_plugin = "P"
+dialog_environment = "E"
+dialog_keys = "K"
+
+[utility]
+open_exe_folder = "Shift+M"
+open_bookmark_folder = "Shift+B"
+open_spi_folder = "Shift+S"
+open_temp_folder = "Shift+T"
+show_help = "F1"

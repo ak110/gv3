@@ -11,6 +11,7 @@ use windows::Win32::UI::Shell::{DragAcceptFiles, DragFinish, DragQueryFileW, HDR
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use crate::archive::ArchiveManager;
+use crate::config::Config;
 use crate::document::{Document, DocumentEvent};
 use crate::extension_registry::ExtensionRegistry;
 use crate::image::{DecoderChain, StandardDecoder};
@@ -19,28 +20,18 @@ use crate::render::layout::DisplayMode;
 use crate::susie::SusieManager;
 use crate::ui::cursor_hider::{CursorHider, TIMER_ID_CURSOR_HIDE};
 use crate::ui::fullscreen::FullscreenState;
+use crate::ui::key_config::{
+    Action, InputChord, KeyConfig, Modifiers, MouseButton, WheelDirection,
+};
 use crate::ui::window;
 
 /// DocumentEventをUIスレッドに通知するためのカスタムメッセージ
 const WM_DOCUMENT_EVENT: u32 = WM_APP + 1;
 
-/// 仮想キーコード定数
-const VK_LEFT: i32 = 0x25;
-const VK_RIGHT: i32 = 0x27;
-const VK_PRIOR: i32 = 0x21; // PageUp
-const VK_NEXT: i32 = 0x22; // PageDown
-const VK_HOME: i32 = 0x24;
-const VK_END: i32 = 0x23;
-const VK_RETURN: i32 = 0x0D;
+/// 修飾キーVKコード
 const VK_CONTROL: i32 = 0x11;
-const VK_X: i32 = 0x58;
-const VK_T: i32 = 0x54;
-const VK_A: i32 = 0x41;
-const VK_NUMPAD0: i32 = 0x60;
-const VK_ADD: i32 = 0x6B;
-const VK_SUBTRACT: i32 = 0x6D;
-const VK_MULTIPLY: i32 = 0x6A;
-const VK_DIVIDE: i32 = 0x6F;
+const VK_SHIFT: i32 = 0x10;
+const VK_MENU: i32 = 0x12; // Alt
 
 /// メインウィンドウ
 pub struct AppWindow {
@@ -51,11 +42,12 @@ pub struct AppWindow {
     fullscreen: FullscreenState,
     cursor_hider: CursorHider,
     always_on_top: bool,
+    key_config: KeyConfig,
 }
 
 impl AppWindow {
     /// AppWindowを作成しウィンドウを表示する
-    pub fn create(initial_file: Option<&Path>) -> Result<Box<Self>> {
+    pub fn create(config: Config, initial_file: Option<&Path>) -> Result<Box<Self>> {
         let class_name = windows::core::w!("gv3_main");
         window::register_window_class(class_name, Some(Self::wnd_proc))?;
 
@@ -67,13 +59,13 @@ impl AppWindow {
         }
 
         let (sender, receiver) = crossbeam_channel::unbounded();
-        let renderer = D2DRenderer::new(hwnd)?;
+        let renderer = D2DRenderer::new(hwnd, &config.display)?;
 
         // 拡張子レジストリ + Susieプラグイン + デコーダチェーン + アーカイブマネージャの初期化
         let mut registry = ExtensionRegistry::new();
         let spi_dir = std::env::current_exe()
             .ok()
-            .and_then(|p| p.parent().map(|d| d.join("spi")));
+            .and_then(|p| p.parent().map(|d| d.join(&config.susie.plugin_dir)));
         let susie_manager = spi_dir
             .as_deref()
             .map(SusieManager::discover)
@@ -98,6 +90,15 @@ impl AppWindow {
 
         let document = Document::new(sender, decoder, Arc::clone(&registry), archive_manager);
 
+        let always_on_top = config.window.always_on_top;
+        let base_image_size = config.prefetch.base_image_size();
+
+        // キーバインド設定の読み込み
+        let key_config_path = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.join("gv3.keys.toml")));
+        let key_config = KeyConfig::load(key_config_path.as_deref());
+
         let mut app = Box::new(Self {
             hwnd,
             document,
@@ -105,7 +106,8 @@ impl AppWindow {
             renderer,
             fullscreen: FullscreenState::new(),
             cursor_hider: CursorHider::new(),
-            always_on_top: false,
+            always_on_top,
+            key_config,
         });
 
         // GWLP_USERDATAにポインタを格納（WndProcからアクセスするため）
@@ -123,7 +125,23 @@ impl AppWindow {
             );
         });
         let cache_budget = Self::get_cache_budget();
-        app.document.start_prefetch(notify, cache_budget);
+        app.document
+            .start_prefetch(notify, cache_budget, base_image_size);
+
+        // 設定でalways_on_topが有効な場合、ウィンドウに反映
+        if always_on_top {
+            unsafe {
+                let _ = SetWindowPos(
+                    hwnd,
+                    Some(HWND_TOPMOST),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE,
+                );
+            }
+        }
 
         // 初期ファイルがあれば開く
         if let Some(path) = initial_file {
@@ -210,15 +228,14 @@ impl AppWindow {
         }
     }
 
-    /// Ctrlキーが押されているか判定
-    fn is_ctrl_down() -> bool {
-        unsafe { GetKeyState(VK_CONTROL) < 0 }
-    }
-
-    /// Altキーが押されているか判定
-    fn is_alt_down() -> bool {
+    /// 現在の修飾キー状態を取得
+    fn current_modifiers() -> Modifiers {
         unsafe {
-            GetKeyState(0x12 /* VK_MENU */) < 0
+            Modifiers {
+                ctrl: GetKeyState(VK_CONTROL) < 0,
+                shift: GetKeyState(VK_SHIFT) < 0,
+                alt: GetKeyState(VK_MENU) < 0,
+            }
         }
     }
 
@@ -306,46 +323,53 @@ impl AppWindow {
                     app.on_size(width, height);
                     return LRESULT(0);
                 }
-                WM_KEYDOWN => {
-                    app.on_keydown(wparam.0 as i32);
-                    return LRESULT(0);
-                }
-                WM_SYSKEYDOWN => {
-                    // Alt+Enter → フルスクリーントグル
-                    if wparam.0 as i32 == VK_RETURN && Self::is_alt_down() {
-                        app.toggle_fullscreen();
+                WM_KEYDOWN | WM_SYSKEYDOWN => {
+                    let chord = InputChord::Key {
+                        vk: wparam.0 as u16,
+                        modifiers: Self::current_modifiers(),
+                    };
+                    if let Some(action) = app.key_config.lookup(&chord) {
+                        app.execute_action(action);
+                        return LRESULT(0);
+                    }
+                    // SYSKEYDOWNは未処理時にDefWindowProcへ渡す必要あり
+                    if msg == WM_SYSKEYDOWN {
+                        // fall through to DefWindowProcW
+                    } else {
                         return LRESULT(0);
                     }
                 }
                 WM_MOUSEWHEEL => {
                     let delta = ((wparam.0 >> 16) & 0xFFFF) as i16;
-                    let ctrl = Self::is_ctrl_down();
-                    if ctrl {
-                        // Ctrl+ホイール → 倍率変更
-                        if let Some((iw, ih)) = app.current_image_size() {
-                            let (ww, wh) = app.client_size();
-                            let layout = app.renderer.layout_mut();
-                            if delta > 0 {
-                                layout.zoom_out(iw, ih, ww, wh);
-                            } else {
-                                layout.zoom_in(iw, ih, ww, wh);
-                            }
-                            app.invalidate();
-                        }
+                    let direction = if delta > 0 {
+                        WheelDirection::Up
                     } else {
-                        // ホイール → ナビゲーション（上=前へ、下=次へ）
-                        if delta > 0 {
-                            app.document.navigate_relative(-1);
-                        } else {
-                            app.document.navigate_relative(1);
-                        }
-                        app.process_document_events();
+                        WheelDirection::Down
+                    };
+                    let chord = InputChord::Wheel {
+                        direction,
+                        modifiers: Self::current_modifiers(),
+                    };
+                    if let Some(action) = app.key_config.lookup(&chord) {
+                        app.execute_action(action);
                     }
                     return LRESULT(0);
                 }
                 WM_LBUTTONDBLCLK => {
-                    if !app.fullscreen.is_fullscreen() {
-                        app.toggle_maximize();
+                    let chord = InputChord::Mouse {
+                        button: MouseButton::LeftDoubleClick,
+                    };
+                    if let Some(action) = app.key_config.lookup(&chord) {
+                        app.execute_action(action);
+                    }
+                    return LRESULT(0);
+                }
+                WM_MBUTTONUP => {
+                    let chord = InputChord::Mouse {
+                        button: MouseButton::MiddleClick,
+                    };
+                    if let Some(action) = app.key_config.lookup(&chord) {
+                        app.execute_action(action);
                     }
                     return LRESULT(0);
                 }
@@ -400,101 +424,162 @@ impl AppWindow {
         }
     }
 
-    fn on_keydown(&mut self, vk: i32) {
-        let ctrl = Self::is_ctrl_down();
-
-        match (vk, ctrl) {
+    /// アクションを実行する
+    fn execute_action(&mut self, action: Action) {
+        match action {
             // --- ナビゲーション ---
-            (VK_LEFT, false) => self.document.navigate_relative(-1),
-            (VK_RIGHT, false) => self.document.navigate_relative(1),
-            (VK_PRIOR, false) => self.document.navigate_relative(-5),
-            (VK_NEXT, false) => self.document.navigate_relative(5),
-            (VK_PRIOR, true) => self.document.navigate_relative(-50),
-            (VK_NEXT, true) => self.document.navigate_relative(50),
-            (VK_HOME, true) => self.document.navigate_first(),
-            (VK_END, true) => self.document.navigate_last(),
+            Action::NavigateBack => {
+                self.document.navigate_relative(-1);
+                self.process_document_events();
+            }
+            Action::NavigateForward => {
+                self.document.navigate_relative(1);
+                self.process_document_events();
+            }
+            Action::Navigate1Back => {
+                self.document.navigate_relative(-1);
+                self.process_document_events();
+            }
+            Action::Navigate1Forward => {
+                self.document.navigate_relative(1);
+                self.process_document_events();
+            }
+            Action::Navigate5Back => {
+                self.document.navigate_relative(-5);
+                self.process_document_events();
+            }
+            Action::Navigate5Forward => {
+                self.document.navigate_relative(5);
+                self.process_document_events();
+            }
+            Action::Navigate50Back => {
+                self.document.navigate_relative(-50);
+                self.process_document_events();
+            }
+            Action::Navigate50Forward => {
+                self.document.navigate_relative(50);
+                self.process_document_events();
+            }
+            Action::NavigateFirst => {
+                self.document.navigate_first();
+                self.process_document_events();
+            }
+            Action::NavigateLast => {
+                self.document.navigate_last();
+                self.process_document_events();
+            }
 
-            // --- 表示モード切替 ---
-            (VK_DIVIDE, false) => {
-                // Num / → 自動縮小
+            // --- 表示モード ---
+            Action::DisplayAutoShrink => {
                 self.renderer.layout_mut().mode = DisplayMode::AutoShrink;
                 self.invalidate();
-                return;
             }
-            (VK_MULTIPLY, false) => {
-                // Num * → 自動拡大・縮小
+            Action::DisplayAutoFit => {
                 self.renderer.layout_mut().mode = DisplayMode::AutoFit;
                 self.invalidate();
-                return;
             }
-
-            // --- 倍率変更 ---
-            (VK_SUBTRACT, true) => {
-                // Ctrl+Num - → zoom out
-                if let Some((iw, ih)) = self.current_image_size() {
-                    let (ww, wh) = self.client_size();
-                    self.renderer.layout_mut().zoom_out(iw, ih, ww, wh);
-                    self.invalidate();
-                }
-                return;
-            }
-            (VK_ADD, true) => {
-                // Ctrl+Num + → zoom in
+            Action::ZoomIn => {
                 if let Some((iw, ih)) = self.current_image_size() {
                     let (ww, wh) = self.client_size();
                     self.renderer.layout_mut().zoom_in(iw, ih, ww, wh);
                     self.invalidate();
                 }
-                return;
             }
-            (VK_NUMPAD0, true) => {
-                // Ctrl+Num0 → 倍率リセット
+            Action::ZoomOut => {
+                if let Some((iw, ih)) = self.current_image_size() {
+                    let (ww, wh) = self.client_size();
+                    self.renderer.layout_mut().zoom_out(iw, ih, ww, wh);
+                    self.invalidate();
+                }
+            }
+            Action::ZoomReset => {
                 self.renderer.layout_mut().zoom_reset();
                 self.invalidate();
-                return;
             }
-
-            // --- 余白トグル ---
-            (VK_NUMPAD0, false) => {
+            Action::ToggleMargin => {
                 self.renderer.layout_mut().toggle_margin();
                 self.invalidate();
-                return;
             }
-
-            // --- カーソル非表示トグル ---
-            (VK_SUBTRACT, false) => {
-                // Num - → カーソル非表示トグル
-                self.cursor_hider.toggle_enabled(self.hwnd);
-                return;
-            }
-
-            // --- ウィンドウ操作 ---
-            (VK_X, true) => {
-                // Ctrl+X → 最小化
-                unsafe {
-                    let _ = ShowWindow(self.hwnd, SW_MINIMIZE);
-                }
-                return;
-            }
-            (VK_T, true) => {
-                // Ctrl+T → 常に手前に表示トグル
-                self.toggle_always_on_top();
-                return;
-            }
-
-            // --- αチャネル背景切替 ---
-            (VK_A, false) => {
-                // A → White → Black → Checker 巡回
+            Action::CycleAlphaBackground => {
                 self.renderer.cycle_alpha_background();
                 self.invalidate();
-                return;
             }
 
-            _ => return,
-        }
+            // --- ウィンドウ ---
+            Action::ToggleFullscreen => {
+                self.toggle_fullscreen();
+            }
+            Action::Minimize => unsafe {
+                let _ = ShowWindow(self.hwnd, SW_MINIMIZE);
+            },
+            Action::ToggleMaximize => {
+                if !self.fullscreen.is_fullscreen() {
+                    self.toggle_maximize();
+                }
+            }
+            Action::ToggleAlwaysOnTop => {
+                self.toggle_always_on_top();
+            }
+            Action::ToggleCursorHide => {
+                self.cursor_hider.toggle_enabled(self.hwnd);
+            }
 
-        // ナビゲーション操作後のイベント処理
-        self.process_document_events();
+            // --- Phase 8 スタブ ---
+            Action::NavigatePrevFolder
+            | Action::NavigateNextFolder
+            | Action::NavigatePrevMark
+            | Action::NavigateNextMark
+            | Action::NavigateToPage
+            | Action::SortNavigateBack
+            | Action::SortNavigateForward
+            | Action::ToggleMenuBar
+            | Action::NewWindow
+            | Action::OpenFile
+            | Action::OpenFolder
+            | Action::OpenHistory
+            | Action::CloseAll
+            | Action::Reload
+            | Action::RemoveFromList
+            | Action::DeleteFile
+            | Action::MoveFile
+            | Action::CopyFile
+            | Action::OpenContainingFolder
+            | Action::CopyFileName
+            | Action::CopyImage
+            | Action::PasteImage
+            | Action::ExportJpg
+            | Action::ExportBmp
+            | Action::ExportPng
+            | Action::ShowImageInfo
+            | Action::MarkSet
+            | Action::MarkUnset
+            | Action::MarkInvertAll
+            | Action::MarkInvertToHere
+            | Action::MarkedRemoveFromList
+            | Action::MarkedDelete
+            | Action::MarkedMove
+            | Action::MarkedCopy
+            | Action::MarkedCopyNames
+            | Action::BookmarkSave
+            | Action::BookmarkLoad
+            | Action::BookmarkOpenEditor
+            | Action::ToggleFileList
+            | Action::DialogDisplay
+            | Action::DialogImage
+            | Action::DialogDraw
+            | Action::DialogList
+            | Action::DialogGeneral
+            | Action::DialogPlugin
+            | Action::DialogEnvironment
+            | Action::DialogKeys
+            | Action::OpenExeFolder
+            | Action::OpenBookmarkFolder
+            | Action::OpenSpiFolder
+            | Action::OpenTempFolder
+            | Action::ShowHelp => {
+                eprintln!("未実装: {action:?}");
+            }
+        }
     }
 
     fn on_drop_files(&mut self, hdrop: HDROP) {

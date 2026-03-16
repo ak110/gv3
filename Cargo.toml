@@ -21,8 +21,11 @@ windows = { version = "0.61", features = [
     "Win32_UI_Shell",
     "Win32_System_SystemInformation",
     "Win32_Globalization",
+    "Win32_System_Registry",
 ] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "bmp", "webp"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
 anyhow = "1"
 thiserror = "2"
 crossbeam-channel = "0.5"

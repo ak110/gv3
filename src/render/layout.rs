@@ -40,6 +40,15 @@ impl Layout {
         }
     }
 
+    /// Configから初期化
+    pub fn from_config(mode: DisplayMode, margin_amount: f32) -> Self {
+        Self {
+            mode,
+            margin_enabled: false,
+            margin_amount,
+        }
+    }
+
     /// 画像サイズとウィンドウサイズから描画先矩形を計算
     pub fn calculate(
         &self,

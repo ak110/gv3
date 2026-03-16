@@ -14,6 +14,7 @@ use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
 
 use super::layout::{DrawRect, Layout};
+use crate::config::DisplayConfig;
 use crate::image::DecodedImage;
 
 /// αチャネル背景モード
@@ -47,19 +48,22 @@ const BG_COLOR: D2D1_COLOR_F = D2D1_COLOR_F {
 };
 
 impl D2DRenderer {
-    pub fn new(hwnd: HWND) -> Result<Self> {
+    pub fn new(hwnd: HWND, display_config: &DisplayConfig) -> Result<Self> {
         unsafe {
             let factory: ID2D1Factory = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)
                 .context("D2D1Factory作成失敗")?;
 
             let render_target = Self::create_render_target(&factory, hwnd)?;
+            let layout =
+                Layout::from_config(display_config.to_display_mode(), display_config.margin);
+            let alpha_bg = display_config.to_alpha_background();
 
             Ok(Self {
                 factory,
                 render_target,
-                layout: Layout::new(),
+                layout,
                 cached_bitmap: None,
-                alpha_bg: AlphaBackground::Checker,
+                alpha_bg,
                 checker_brush: None,
             })
         }

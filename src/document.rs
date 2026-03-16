@@ -67,16 +67,20 @@ impl Document {
     /// 先読みエンジンを起動する
     /// `notify`: レスポンス受信時のコールバック（UIスレッド通知用）
     /// `cache_budget`: キャッシュメモリ予算（バイト）
-    pub fn start_prefetch(&mut self, notify: Box<dyn Fn() + Send>, cache_budget: usize) {
+    /// `base_image_size`: キャッシュ枚数計算の基準となる1枚あたりのバイト数
+    pub fn start_prefetch(
+        &mut self,
+        notify: Box<dyn Fn() + Send>,
+        cache_budget: usize,
+        base_image_size: usize,
+    ) {
         self.prefetch = Some(PrefetchEngine::new(notify, Arc::clone(&self.decoder)));
-        self.update_cache_range(cache_budget);
+        self.update_cache_range(cache_budget, base_image_size);
     }
 
     /// キャッシュ範囲を再計算する
-    fn update_cache_range(&mut self, cache_budget: usize) {
-        // 基準画像サイズ: 1024×1536×4 ≈ 6MB
-        let base_size = 1024 * 1536 * 4;
-        let total_slots = (cache_budget / base_size).max(3);
+    fn update_cache_range(&mut self, cache_budget: usize, base_image_size: usize) {
+        let total_slots = (cache_budget / base_image_size).max(3);
         self.cache_forward = (total_slots * 2 / 3).max(1);
         self.cache_backward = (total_slots / 3).max(1);
         self.cache.set_max_memory(cache_budget);
