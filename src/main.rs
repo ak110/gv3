@@ -5,6 +5,7 @@ mod document;
 mod file_info;
 mod file_list;
 mod image;
+mod prefetch;
 mod render;
 mod ui;
 

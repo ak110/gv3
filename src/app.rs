@@ -4,6 +4,7 @@ use anyhow::Result;
 use crossbeam_channel::Receiver;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::{InvalidateRect, UpdateWindow, ValidateRect};
+use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
 use windows::Win32::UI::Input::KeyboardAndMouse::GetKeyState;
 use windows::Win32::UI::Shell::{DragAcceptFiles, DragFinish, DragQueryFileW, HDROP};
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -59,6 +60,20 @@ impl AppWindow {
         // GWLP_USERDATAにポインタを格納（WndProcからアクセスするため）
         window::set_window_data(hwnd, &mut *app as *mut Self);
 
+        // 先読みエンジン起動
+        // 通知コールバック: ワーカースレッドからPostMessageWでUIスレッドを起こす
+        let hwnd_raw = hwnd.0 as isize;
+        let notify = Box::new(move || unsafe {
+            let _ = PostMessageW(
+                Some(HWND(hwnd_raw as *mut _)),
+                WM_DOCUMENT_EVENT,
+                WPARAM(0),
+                LPARAM(0),
+            );
+        });
+        let cache_budget = Self::get_cache_budget();
+        app.document.start_prefetch(notify, cache_budget);
+
         // 初期ファイルがあれば開く
         if let Some(path) = initial_file {
             if let Err(e) = app.document.open(path) {
@@ -75,8 +90,27 @@ impl AppWindow {
         Ok(app)
     }
 
+    /// 空きメモリの50%をキャッシュ予算として返す
+    fn get_cache_budget() -> usize {
+        let mut mem_info = MEMORYSTATUSEX {
+            dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32,
+            ..Default::default()
+        };
+        let available = unsafe {
+            if GlobalMemoryStatusEx(&mut mem_info).is_ok() {
+                mem_info.ullAvailPhys as usize
+            } else {
+                512 * 1024 * 1024 // フォールバック: 512MB
+            }
+        };
+        available / 2
+    }
+
     /// DocumentEventを処理する
     fn process_document_events(&mut self) {
+        // 先読みレスポンスを処理（キャッシュ格納 + current_image更新）
+        self.document.process_prefetch_responses();
+
         while let Ok(event) = self.event_receiver.try_recv() {
             match event {
                 DocumentEvent::ImageReady => unsafe {

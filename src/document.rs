@@ -5,6 +5,7 @@ use crossbeam_channel::Sender;
 
 use crate::file_list::FileList;
 use crate::image::{DecodedImage, ImageDecoder, StandardDecoder};
+use crate::prefetch::{LoadResponse, PageCache, PrefetchEngine};
 
 /// DocumentからUIへの通知イベント
 #[derive(Debug)]
@@ -27,6 +28,11 @@ pub struct Document {
     decoder: StandardDecoder,
     current_image: Option<DecodedImage>,
     file_list: FileList,
+    // 先読みエンジン
+    cache: PageCache,
+    prefetch: Option<PrefetchEngine>,
+    cache_backward: usize,
+    cache_forward: usize,
 }
 
 impl Document {
@@ -36,6 +42,116 @@ impl Document {
             decoder: StandardDecoder::new(),
             current_image: None,
             file_list: FileList::new(),
+            cache: PageCache::new(0),
+            prefetch: None,
+            cache_backward: 0,
+            cache_forward: 0,
+        }
+    }
+
+    /// 先読みエンジンを起動する
+    /// `notify`: レスポンス受信時のコールバック（UIスレッド通知用）
+    /// `cache_budget`: キャッシュメモリ予算（バイト）
+    pub fn start_prefetch(&mut self, notify: Box<dyn Fn() + Send>, cache_budget: usize) {
+        self.prefetch = Some(PrefetchEngine::new(notify));
+        self.update_cache_range(cache_budget);
+    }
+
+    /// キャッシュ範囲を再計算する
+    fn update_cache_range(&mut self, cache_budget: usize) {
+        // 基準画像サイズ: 1024×1536×4 ≈ 6MB
+        let base_size = 1024 * 1536 * 4;
+        let total_slots = (cache_budget / base_size).max(3);
+        self.cache_forward = (total_slots * 2 / 3).max(1);
+        self.cache_backward = (total_slots / 3).max(1);
+        self.cache.set_max_memory(cache_budget);
+    }
+
+    /// 先読みレスポンスを処理する（キャッシュ格納 + current_image更新）
+    pub fn process_prefetch_responses(&mut self) {
+        let Some(prefetch) = &self.prefetch else {
+            return;
+        };
+        let current_gen = prefetch.generation();
+        let responses = prefetch.drain_responses();
+
+        for resp in responses {
+            match resp {
+                LoadResponse::Loaded {
+                    index,
+                    image,
+                    generation,
+                } => {
+                    // 古い世代のレスポンスは破棄
+                    if generation != current_gen {
+                        continue;
+                    }
+                    // 現在表示すべきページでまだ画像がない場合、即表示
+                    let is_current = self.file_list.current_index() == Some(index)
+                        && self.current_image.is_none();
+                    if is_current {
+                        self.current_image = Some(image);
+                        let _ = self.event_sender.send(DocumentEvent::ImageReady);
+                    } else {
+                        self.cache.insert(index, image);
+                    }
+                }
+                LoadResponse::Failed {
+                    generation, error, ..
+                } => {
+                    if generation != current_gen {
+                        continue;
+                    }
+                    // 先読みの失敗ではmark_failedしない（一時的なエラーの可能性）
+                    let _ = self.event_sender.send(DocumentEvent::Error(error));
+                }
+            }
+        }
+    }
+
+    /// 現在位置を中心に先読みをスケジュールする
+    fn schedule_prefetch(&mut self) {
+        let Some(prefetch) = &mut self.prefetch else {
+            return;
+        };
+        let Some(center) = self.file_list.current_index() else {
+            return;
+        };
+
+        // 範囲外キャッシュを削除
+        self.cache
+            .evict_outside(center, self.cache_backward, self.cache_forward);
+
+        // 世代を進行（前回のin-flightリクエストを無効化）
+        prefetch.advance_generation();
+
+        let files = self.file_list.files();
+        let len = files.len();
+
+        // 近い順にリクエスト: 前方優先（center+1, center+2, ..., center-1, center-2, ...）
+        let mut indices = Vec::new();
+        let fwd_end = (center + self.cache_forward + 1).min(len);
+        for i in (center + 1)..fwd_end {
+            indices.push(i);
+        }
+        let bwd_start = center.saturating_sub(self.cache_backward);
+        for i in (bwd_start..center).rev() {
+            indices.push(i);
+        }
+
+        for idx in indices {
+            if !self.cache.contains(idx) {
+                prefetch.request_load(idx, files[idx].path.clone());
+            }
+        }
+    }
+
+    /// キャッシュを無効化する（フォルダ切替、再読み込み時）
+    fn invalidate_cache(&mut self) {
+        self.cache.clear();
+        self.file_list.clear_failed();
+        if let Some(prefetch) = &mut self.prefetch {
+            prefetch.advance_generation();
         }
     }
 
@@ -45,6 +161,7 @@ impl Document {
 
         // 親フォルダの画像を列挙
         if let Some(folder) = path.parent() {
+            self.invalidate_cache();
             self.file_list.populate_from_folder(folder)?;
             self.file_list.set_current_by_path(&path);
             let _ = self.event_sender.send(DocumentEvent::FileListChanged);
@@ -56,6 +173,7 @@ impl Document {
     /// フォルダを開く（先頭画像を表示）
     pub fn open_folder(&mut self, folder: &Path) -> Result<()> {
         let folder = Self::canonicalize(folder)?;
+        self.invalidate_cache();
         self.file_list.populate_from_folder(&folder)?;
 
         if self.file_list.len() > 0 {
@@ -88,14 +206,22 @@ impl Document {
 
     /// 現在のファイルをデコードしてイベント送信
     fn load_current(&mut self) -> Result<()> {
-        let path = match self.file_list.current() {
-            Some(info) => info.path.clone(),
-            None => {
-                self.current_image = None;
-                return Ok(());
-            }
+        let Some(index) = self.file_list.current_index() else {
+            self.current_image = None;
+            return Ok(());
         };
 
+        // 1. キャッシュヒット → 瞬時切替
+        if let Some(image) = self.cache.take(index) {
+            self.current_image = Some(image);
+            let _ = self.event_sender.send(DocumentEvent::ImageReady);
+            self.send_navigation_changed();
+            self.schedule_prefetch();
+            return Ok(());
+        }
+
+        // 2. キャッシュミス → 同期デコード（フォールバック）
+        let path = self.file_list.current().unwrap().path.clone();
         let data = std::fs::read(&path)
             .with_context(|| format!("ファイル読み込み失敗: {}", path.display()))?;
 
@@ -106,12 +232,15 @@ impl Document {
             }
             Err(e) => {
                 self.current_image = None;
+                // 同期デコード失敗時はfailedマーク（ナビゲーション時にスキップ対象）
+                self.file_list.mark_failed(index);
                 let msg = format!("{}: {}", path.display(), e);
                 let _ = self.event_sender.send(DocumentEvent::Error(msg));
             }
         }
 
         self.send_navigation_changed();
+        self.schedule_prefetch();
         Ok(())
     }
 

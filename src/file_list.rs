@@ -80,17 +80,31 @@ impl FileList {
     }
 
     /// 相対移動（クランプ、循環しない）
+    /// load_failedのファイルは同方向にスキップする
     pub fn navigate_relative(&mut self, offset: isize) -> bool {
         if self.files.is_empty() {
             return false;
         }
         let current = self.current_index.unwrap_or(0);
-        let new_index = (current as isize + offset)
+        let mut target = (current as isize + offset)
             .max(0)
             .min(self.files.len() as isize - 1) as usize;
 
-        if new_index != current {
-            self.current_index = Some(new_index);
+        // スキップ方向（offsetの符号に合わせる）
+        let step: isize = if offset >= 0 { 1 } else { -1 };
+
+        // load_failedのファイルを同方向にスキップ
+        while target < self.files.len() && self.files[target].load_failed {
+            let next = target as isize + step;
+            if next < 0 || next >= self.files.len() as isize {
+                // 全てfailedで移動先がない → 移動しない
+                return false;
+            }
+            target = next as usize;
+        }
+
+        if target != current {
+            self.current_index = Some(target);
             true
         } else {
             false
@@ -151,6 +165,25 @@ impl FileList {
         if let Some(path) = current_path {
             self.set_current_by_path(&path);
         }
+    }
+
+    /// 指定インデックスのファイルをデコード失敗状態にする
+    pub fn mark_failed(&mut self, index: usize) {
+        if let Some(info) = self.files.get_mut(index) {
+            info.load_failed = true;
+        }
+    }
+
+    /// 全ファイルの失敗状態をクリア（フォルダ再読み込み時用）
+    pub fn clear_failed(&mut self) {
+        for info in &mut self.files {
+            info.load_failed = false;
+        }
+    }
+
+    /// ファイル一覧への参照
+    pub fn files(&self) -> &[FileInfo] {
+        &self.files
     }
 
     /// 現在のファイル情報

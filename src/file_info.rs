@@ -10,7 +10,8 @@ pub struct FileInfo {
     pub file_name: String, // ソート用キャッシュ
     pub file_size: u64,
     pub modified: SystemTime,
-    pub marked: bool, // Phase 2では未使用、Phase 8で使用
+    pub marked: bool,      // Phase 8で使用
+    pub load_failed: bool, // デコード失敗フラグ（ナビゲーション時にスキップ）
 }
 
 impl FileInfo {
@@ -33,6 +34,7 @@ impl FileInfo {
             file_size: metadata.len(),
             modified,
             marked: false,
+            load_failed: false,
         })
     }
 }
@@ -55,6 +57,7 @@ mod tests {
         assert_eq!(info.file_name, "test.png");
         assert_eq!(info.file_size, 13);
         assert!(!info.marked);
+        assert!(!info.load_failed);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
