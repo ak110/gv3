@@ -4,7 +4,7 @@ Windows用画像ビューアー。
 
 ## 動作環境
 
-- Windows 10 以降 (x64)
+- Windows 10以降 (x64)
 
 ## 使い方
 
@@ -64,7 +64,7 @@ ZIP / cbz, RAR / cbr, 7z
 64bit Susieプラグイン (.sph / .spi) に対応しています。
 実行ファイルと同じディレクトリの `spi/` フォルダにプラグインDLLを配置すると自動検出されます。
 
-```
+```text
 gv3.exe
 spi/
   ifXXX.sph    ← 画像プラグイン

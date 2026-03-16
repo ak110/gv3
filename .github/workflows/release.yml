@@ -4,13 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       bump:
-        description: 'バージョンの種類'
+        description: "バージョンの種類"
         required: true
         type: choice
         options:
-          - 'バグフィックス'
-          - 'マイナーバージョンアップ'
-          - 'メジャーバージョンアップ'
+          - "バグフィックス"
+          - "マイナーバージョンアップ"
+          - "メジャーバージョンアップ"
 
 permissions:
   contents: write

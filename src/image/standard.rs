@@ -182,7 +182,7 @@ mod tests {
             // tEXtチャンクを追加
             let text_chunk =
                 png::text_metadata::TEXtChunk::new("Author".to_string(), "TestAuthor".to_string());
-            encoder.add_text_chunk(text_chunk.keyword, text_chunk.text);
+            let _ = encoder.add_text_chunk(text_chunk.keyword, text_chunk.text);
             let mut writer = encoder.write_header().unwrap();
             writer.write_image_data(&[255, 255, 255, 255]).unwrap();
         }
