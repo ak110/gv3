@@ -73,6 +73,24 @@ impl ArchiveManager {
         self.handlers.push(handler);
     }
 
+    /// パスの拡張子を正規化する（例: "test.ZIP" → ".zip"）
+    fn normalized_extension(path: &Path) -> String {
+        path.extension()
+            .and_then(|e| e.to_str())
+            .map(|e| format!(".{}", e.to_lowercase()))
+            .unwrap_or_default()
+    }
+
+    /// パスの拡張子に対応するハンドラを返す
+    fn find_handler(&self, archive_path: &Path) -> Result<&dyn ArchiveHandler> {
+        let ext = Self::normalized_extension(archive_path);
+        self.handlers
+            .iter()
+            .find(|h| h.supported_extensions().contains(&ext))
+            .map(|h| h.as_ref())
+            .ok_or_else(|| anyhow::anyhow!("未対応のアーカイブ形式: {}", archive_path.display()))
+    }
+
     /// パスがアーカイブファイルか拡張子で判定する
     pub fn is_archive(&self, path: &Path) -> bool {
         path.file_name()
@@ -87,62 +105,26 @@ impl ArchiveManager {
         archive_path: &Path,
         target_dir: &Path,
     ) -> Result<Vec<ExtractedEntry>> {
-        let ext = archive_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| format!(".{}", e.to_lowercase()))
-            .unwrap_or_default();
-
-        for handler in &self.handlers {
-            if handler.supported_extensions().contains(&ext) {
-                return handler.extract_images(archive_path, target_dir);
-            }
-        }
-
-        bail!("未対応のアーカイブ形式: {}", archive_path.display());
+        self.find_handler(archive_path)?
+            .extract_images(archive_path, target_dir)
     }
 
     /// パスに対応するハンドラがオンデマンド読み出しに対応しているか判定する
     pub fn supports_on_demand(&self, archive_path: &Path) -> bool {
-        let ext = archive_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| format!(".{}", e.to_lowercase()))
-            .unwrap_or_default();
-        self.handlers
-            .iter()
-            .any(|h| h.supported_extensions().contains(&ext) && h.supports_on_demand())
+        self.find_handler(archive_path)
+            .is_ok_and(|h| h.supports_on_demand())
     }
 
     /// アーカイブ内の画像エントリ一覧を取得する（オンデマンド用）
     #[allow(dead_code)]
     pub fn list_images(&self, archive_path: &Path) -> Result<Vec<ArchiveImageEntry>> {
-        let ext = archive_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| format!(".{}", e.to_lowercase()))
-            .unwrap_or_default();
-        for handler in &self.handlers {
-            if handler.supported_extensions().contains(&ext) {
-                return handler.list_images(archive_path);
-            }
-        }
-        bail!("未対応のアーカイブ形式: {}", archive_path.display());
+        self.find_handler(archive_path)?.list_images(archive_path)
     }
 
     /// アーカイブから指定エントリのデータを読み出す（オンデマンド用）
     pub fn read_entry(&self, archive_path: &Path, entry_name: &str) -> Result<Vec<u8>> {
-        let ext = archive_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| format!(".{}", e.to_lowercase()))
-            .unwrap_or_default();
-        for handler in &self.handlers {
-            if handler.supported_extensions().contains(&ext) {
-                return handler.read_entry(archive_path, entry_name);
-            }
-        }
-        bail!("未対応のアーカイブ形式: {}", archive_path.display());
+        self.find_handler(archive_path)?
+            .read_entry(archive_path, entry_name)
     }
 
     /// インメモリバッファからエントリ一覧を取得する（ZIPキャッシュ用）
@@ -151,12 +133,7 @@ impl ArchiveManager {
         buffer: &[u8],
         archive_path: &Path,
     ) -> Result<Vec<ArchiveImageEntry>> {
-        let ext = archive_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| format!(".{}", e.to_lowercase()))
-            .unwrap_or_default();
-        // ZIPのみバッファベースをサポート
+        let ext = Self::normalized_extension(archive_path);
         if ext == ".zip" || ext == ".cbz" {
             return zip::ZipHandler::list_images_from_buffer(buffer, &self.registry);
         }
@@ -171,11 +148,7 @@ impl ArchiveManager {
         entry_name: &str,
         archive_path: &Path,
     ) -> Result<Vec<u8>> {
-        let ext = archive_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| format!(".{}", e.to_lowercase()))
-            .unwrap_or_default();
+        let ext = Self::normalized_extension(archive_path);
         if ext == ".zip" || ext == ".cbz" {
             return zip::ZipHandler::read_entry_from_buffer(buffer, entry_name);
         }

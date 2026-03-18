@@ -1241,19 +1241,6 @@ impl AppWindow {
             Action::Exit => unsafe {
                 let _ = DestroyWindow(self.hwnd);
             },
-
-            // --- 未実装スタブ ---
-            Action::OpenHistory
-            | Action::DialogDisplay
-            | Action::DialogImage
-            | Action::DialogDraw
-            | Action::DialogList
-            | Action::DialogGeneral
-            | Action::DialogPlugin
-            | Action::DialogEnvironment
-            | Action::DialogKeys => {
-                eprintln!("未実装: {action:?}");
-            }
         }
     }
 

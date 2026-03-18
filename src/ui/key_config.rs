@@ -45,7 +45,7 @@ pub enum InputChord {
 
 // --- Action enum ---
 
-/// 全操作を列挙するenum（Phase 8未実装のものもスタブとして含む）
+/// 全操作を列挙するenum
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Action {
     // --- ナビゲーション ---
@@ -86,11 +86,10 @@ pub enum Action {
     ToggleCursorHide,
     ToggleMenuBar,
 
-    // --- ファイル操作 (Phase 8 スタブ) ---
+    // --- ファイル操作 ---
     NewWindow,
     OpenFile,
     OpenFolder,
-    OpenHistory,
     CloseAll,
     Reload,
     RemoveFromList,
@@ -106,7 +105,7 @@ pub enum Action {
     ExportPng,
     ShowImageInfo,
 
-    // --- マーク操作 (Phase 8 スタブ) ---
+    // --- マーク操作 ---
     MarkSet,
     MarkUnset,
     MarkInvertAll,
@@ -117,24 +116,14 @@ pub enum Action {
     MarkedCopy,
     MarkedCopyNames,
 
-    // --- ブックマーク (Phase 8 スタブ) ---
+    // --- ブックマーク ---
     BookmarkSave,
     BookmarkLoad,
 
-    // --- ファイルリスト (Phase 8 スタブ) ---
+    // --- ファイルリスト ---
     ToggleFileList,
 
-    // --- ダイアログ (Phase 8 スタブ) ---
-    DialogDisplay,
-    DialogImage,
-    DialogDraw,
-    DialogList,
-    DialogGeneral,
-    DialogPlugin,
-    DialogEnvironment,
-    DialogKeys,
-
-    // --- ユーティリティ (Phase 8 スタブ) ---
+    // --- ユーティリティ ---
     OpenExeFolder,
     OpenBookmarkFolder,
     OpenSpiFolder,
@@ -258,7 +247,6 @@ impl KeyConfig {
         bind(&mut m, "Ctrl+N", Action::NewWindow);
         bind(&mut m, "Ctrl+O", Action::OpenFile);
         bind(&mut m, "Ctrl+Shift+O", Action::OpenFolder);
-        bind(&mut m, "Ctrl+H", Action::OpenHistory);
         bind(&mut m, "Ctrl+W", Action::CloseAll);
         bind(&mut m, "F5", Action::Reload);
         bind(&mut m, "BackSpace", Action::RemoveFromList);
@@ -289,16 +277,6 @@ impl KeyConfig {
 
         // [list]
         bind(&mut m, "F4", Action::ToggleFileList);
-
-        // [dialog]
-        bind(&mut m, "C", Action::DialogDisplay);
-        bind(&mut m, "G", Action::DialogImage);
-        bind(&mut m, "D", Action::DialogDraw);
-        bind(&mut m, "L", Action::DialogList);
-        bind(&mut m, "O", Action::DialogGeneral);
-        bind(&mut m, "P", Action::DialogPlugin);
-        bind(&mut m, "E", Action::DialogEnvironment);
-        bind(&mut m, "K", Action::DialogKeys);
 
         // [utility]
         bind(&mut m, "Shift+M", Action::OpenExeFolder);
@@ -504,7 +482,6 @@ fn field_to_action(field: &str) -> Option<Action> {
         "new_window" => Action::NewWindow,
         "open_file" => Action::OpenFile,
         "open_folder" => Action::OpenFolder,
-        "open_history" => Action::OpenHistory,
         "close_all" => Action::CloseAll,
         "reload" => Action::Reload,
         "remove_from_list" => Action::RemoveFromList,
@@ -537,16 +514,6 @@ fn field_to_action(field: &str) -> Option<Action> {
 
         // ファイルリスト
         "toggle_file_list" => Action::ToggleFileList,
-
-        // ダイアログ
-        "dialog_display" => Action::DialogDisplay,
-        "dialog_image" => Action::DialogImage,
-        "dialog_draw" => Action::DialogDraw,
-        "dialog_list" => Action::DialogList,
-        "dialog_general" => Action::DialogGeneral,
-        "dialog_plugin" => Action::DialogPlugin,
-        "dialog_environment" => Action::DialogEnvironment,
-        "dialog_keys" => Action::DialogKeys,
 
         // ユーティリティ
         "open_exe_folder" => Action::OpenExeFolder,

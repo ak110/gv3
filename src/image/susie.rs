@@ -8,8 +8,7 @@ use super::{DecodedImage, ImageDecoder, ImageMetadata};
 /// Susie画像プラグインをImageDecoderとして使うアダプタ
 pub struct SusieImageDecoder {
     plugin: SharedPlugin,
-    /// キャッシュした拡張子リスト（Phase 8以降の画像情報表示で使用予定）
-    #[allow(dead_code)]
+    /// キャッシュした拡張子リスト
     extensions: Vec<String>,
 }
 

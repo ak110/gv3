@@ -222,31 +222,25 @@ impl FileList {
     /// ソート実行（現在位置を維持）
     /// グループ（フォルダ/アーカイブ）の出現順を保持しつつ、グループ内でソートする
     pub fn sort(&mut self, order: SortOrder) {
-        // 現在のパスとsourceを記憶（位置復元用）
-        let current_info = self.current().map(|f| (f.path.clone(), f.source.clone()));
+        self.with_position_preserved(|this| {
+            // グループ出現順を記録
+            let mut group_order: HashMap<GroupKey, usize> = HashMap::new();
+            for file in &this.files {
+                let key = Self::group_key(file);
+                let next_id = group_order.len();
+                group_order.entry(key).or_insert(next_id);
+            }
 
-        // グループ出現順を記録
-        let mut group_order: HashMap<GroupKey, usize> = HashMap::new();
-        for file in &self.files {
-            let key = Self::group_key(file);
-            let next_id = group_order.len();
-            group_order.entry(key).or_insert(next_id);
-        }
+            // 第1キー=グループ出現順、第2キー=ソート順
+            this.files.sort_by(|a, b| {
+                let ga = group_order.get(&Self::group_key(a)).copied().unwrap_or(0);
+                let gb = group_order.get(&Self::group_key(b)).copied().unwrap_or(0);
+                ga.cmp(&gb)
+                    .then_with(|| Self::compare_by_sort_order(a, b, order))
+            });
 
-        // 第1キー=グループ出現順、第2キー=ソート順
-        self.files.sort_by(|a, b| {
-            let ga = group_order.get(&Self::group_key(a)).copied().unwrap_or(0);
-            let gb = group_order.get(&Self::group_key(b)).copied().unwrap_or(0);
-            ga.cmp(&gb)
-                .then_with(|| Self::compare_by_sort_order(a, b, order))
+            this.sort_order = order;
         });
-
-        self.sort_order = order;
-
-        // 位置を復元（コンテナ内エントリはsourceベース）
-        if let Some((path, source)) = current_info {
-            self.restore_current_position(&path, &source);
-        }
     }
 
     /// 指定インデックスのファイルをデコード失敗状態にする
@@ -274,6 +268,15 @@ impl FileList {
         self.current_index = None;
     }
 
+    /// 操作前後で現在位置を維持するヘルパー
+    fn with_position_preserved<F: FnOnce(&mut Self)>(&mut self, f: F) {
+        let saved = self.current().map(|f| (f.path.clone(), f.source.clone()));
+        f(self);
+        if let Some((path, source)) = saved {
+            self.restore_current_position(&path, &source);
+        }
+    }
+
     /// 現在のソート順で再ソートする
     pub fn sort_current(&mut self) {
         self.sort(self.sort_order);
@@ -282,21 +285,17 @@ impl FileList {
     /// ファイルリスト全体をシャッフルする（Fisher-Yates）
     /// 現在位置を維持する。
     pub fn shuffle_all(&mut self) {
-        let len = self.files.len();
-        if len <= 1 {
+        if self.files.len() <= 1 {
             return;
         }
-        let current_info = self.current().map(|f| (f.path.clone(), f.source.clone()));
-
-        let mut rng = SimpleRng::new();
-        for i in (1..len).rev() {
-            let j = rng.next_usize(i + 1);
-            self.files.swap(i, j);
-        }
-
-        if let Some((path, source)) = current_info {
-            self.restore_current_position(&path, &source);
-        }
+        self.with_position_preserved(|this| {
+            let len = this.files.len();
+            let mut rng = SimpleRng::new();
+            for i in (1..len).rev() {
+                let j = rng.next_usize(i + 1);
+                this.files.swap(i, j);
+            }
+        });
     }
 
     /// グループ（フォルダ/アーカイブ）の並び順をシャッフルする
@@ -305,43 +304,39 @@ impl FileList {
         if self.files.is_empty() {
             return;
         }
-        let current_info = self.current().map(|f| (f.path.clone(), f.source.clone()));
+        self.with_position_preserved(|this| {
+            // グループを出現順に分割
+            let mut groups: Vec<Vec<FileInfo>> = Vec::new();
+            let mut current_key = Self::group_key(&this.files[0]);
+            let mut current_group = Vec::new();
 
-        // グループを出現順に分割
-        let mut groups: Vec<Vec<FileInfo>> = Vec::new();
-        let mut current_key = Self::group_key(&self.files[0]);
-        let mut current_group = Vec::new();
-
-        for file in self.files.drain(..) {
-            let key = Self::group_key(&file);
-            if key == current_key {
-                current_group.push(file);
-            } else {
-                groups.push(current_group);
-                current_group = vec![file];
-                current_key = key;
+            for file in this.files.drain(..) {
+                let key = Self::group_key(&file);
+                if key == current_key {
+                    current_group.push(file);
+                } else {
+                    groups.push(current_group);
+                    current_group = vec![file];
+                    current_key = key;
+                }
             }
-        }
-        groups.push(current_group);
+            groups.push(current_group);
 
-        // グループ単位でFisher-Yatesシャッフル
-        let glen = groups.len();
-        if glen > 1 {
-            let mut rng = SimpleRng::new();
-            for i in (1..glen).rev() {
-                let j = rng.next_usize(i + 1);
-                groups.swap(i, j);
+            // グループ単位でFisher-Yatesシャッフル
+            let glen = groups.len();
+            if glen > 1 {
+                let mut rng = SimpleRng::new();
+                for i in (1..glen).rev() {
+                    let j = rng.next_usize(i + 1);
+                    groups.swap(i, j);
+                }
             }
-        }
 
-        // flattenして復元
-        for group in groups {
-            self.files.extend(group);
-        }
-
-        if let Some((path, source)) = current_info {
-            self.restore_current_position(&path, &source);
-        }
+            // flattenして復元
+            for group in groups {
+                this.files.extend(group);
+            }
+        });
     }
 
     // --- マーク操作 ---

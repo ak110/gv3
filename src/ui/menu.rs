@@ -233,7 +233,6 @@ const ALL_ACTIONS: &[Action] = &[
     Action::NewWindow,
     Action::OpenFile,
     Action::OpenFolder,
-    Action::OpenHistory,
     Action::CloseAll,
     Action::Reload,
     Action::RemoveFromList,
@@ -263,15 +262,6 @@ const ALL_ACTIONS: &[Action] = &[
     Action::BookmarkLoad,
     // ファイルリスト
     Action::ToggleFileList,
-    // ダイアログ
-    Action::DialogDisplay,
-    Action::DialogImage,
-    Action::DialogDraw,
-    Action::DialogList,
-    Action::DialogGeneral,
-    Action::DialogPlugin,
-    Action::DialogEnvironment,
-    Action::DialogKeys,
     // ユーティリティ
     Action::OpenExeFolder,
     Action::OpenBookmarkFolder,
