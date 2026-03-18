@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Result};
 
 const GITHUB_API_URL: &str = "https://api.github.com/repos/ak110/gv3/releases/latest";
 
@@ -80,18 +80,27 @@ pub fn perform_update(info: &UpdateInfo) -> Result<bool> {
     download_file(&info.download_url, &download_path)?;
 
     // ZIP展開またはそのまま使用
-    let update_exe_path = if info.download_url.ends_with(".zip") {
-        extract_exe_from_zip(&download_path, &temp_dir)?
+    let extracted = if info.download_url.ends_with(".zip") {
+        extract_files_from_zip(&download_path, &temp_dir)?
     } else {
         // 直接exeの場合
         let dest = temp_dir.join("gv3_update.exe");
         std::fs::rename(&download_path, &dest).context("ダウンロードファイルのリネーム失敗")?;
-        dest
+        ExtractedFiles {
+            exe_path: dest,
+            extra_files: Vec::new(),
+        }
     };
 
     // バッチスクリプト生成・起動
     let batch_path = temp_dir.join("gv3_update.bat");
-    generate_update_batch(&batch_path, &update_exe_path, &exe_path, std::process::id())?;
+    generate_update_batch(
+        &batch_path,
+        &extracted.exe_path,
+        &exe_path,
+        &extracted.extra_files,
+        std::process::id(),
+    )?;
     launch_batch(&batch_path)?;
 
     // 起動成功 → 呼び出し元がアプリを終了する
@@ -112,23 +121,59 @@ fn download_file(url: &str, dest: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-/// ZIPからgv3.exeを展開する
-fn extract_exe_from_zip(zip_path: &std::path::Path, temp_dir: &std::path::Path) -> Result<PathBuf> {
+/// ZIP展開結果
+struct ExtractedFiles {
+    /// 新しいgv3.exe のパス
+    exe_path: PathBuf,
+    /// exe以外のファイル（展開先パス）のリスト
+    extra_files: Vec<PathBuf>,
+}
+
+/// ZIPから全ファイルを展開する
+fn extract_files_from_zip(
+    zip_path: &std::path::Path,
+    temp_dir: &std::path::Path,
+) -> Result<ExtractedFiles> {
     let file = std::fs::File::open(zip_path).context("ZIPファイルオープン失敗")?;
     let mut archive = zip::ZipArchive::new(file).context("ZIPアーカイブ読み込み失敗")?;
 
+    let mut exe_path = None;
+    let mut extra_files = Vec::new();
+
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).context("ZIPエントリ取得失敗")?;
-        let name = entry.name().to_lowercase();
-        if name.ends_with("gv3.exe") || name == "gv3.exe" {
+        if entry.is_dir() {
+            continue;
+        }
+        // ファイル名部分のみ取得（ZIPのパスにディレクトリが含まれる場合に対応）
+        let file_name = std::path::Path::new(entry.name())
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if file_name.is_empty() {
+            continue;
+        }
+
+        let lower = file_name.to_lowercase();
+        if lower == "gv3.exe" {
             let dest = temp_dir.join("gv3_update.exe");
             let mut out = std::fs::File::create(&dest).context("展開先ファイル作成失敗")?;
             std::io::copy(&mut entry, &mut out).context("ZIPエントリ展開失敗")?;
-            return Ok(dest);
+            exe_path = Some(dest);
+        } else {
+            // exe以外のファイル（*.default.toml, README.md, LICENSE等）
+            let dest = temp_dir.join(&file_name);
+            let mut out = std::fs::File::create(&dest).context("展開先ファイル作成失敗")?;
+            std::io::copy(&mut entry, &mut out).context("ZIPエントリ展開失敗")?;
+            extra_files.push(dest);
         }
     }
 
-    bail!("ZIP内にgv3.exeが見つかりません")
+    let exe_path = exe_path.ok_or_else(|| anyhow::anyhow!("ZIP内にgv3.exeが見つかりません"))?;
+    Ok(ExtractedFiles {
+        exe_path,
+        extra_files,
+    })
 }
 
 /// 更新用バッチスクリプトを生成する
@@ -144,9 +189,25 @@ fn generate_update_batch(
     batch_path: &std::path::Path,
     update_exe: &std::path::Path,
     target_exe: &std::path::Path,
+    extra_files: &[PathBuf],
     pid: u32,
 ) -> Result<()> {
     let old_exe = target_exe.with_extension("exe.old");
+    let target_dir = target_exe
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("exeの親ディレクトリ取得失敗"))?;
+
+    // exe以外のファイルのコピーコマンドを生成
+    let extra_copy_commands = extra_files
+        .iter()
+        .map(|src| {
+            let file_name = src.file_name().unwrap().to_string_lossy();
+            let dest = target_dir.join(file_name.as_ref());
+            format!(r#"copy /y "{}" "{}""#, src.display(), dest.display())
+        })
+        .collect::<Vec<_>>()
+        .join("\r\n");
+
     // cmd.exeはCP_ACPでバッチを読むため、CP932でエンコードして書き出す。
     // また、if ( ... ) ブロック内に日本語があるとDBCSトレイルバイトが
     // 特殊文字と誤認されるため、( ) ブロックを使わず goto で制御する。
@@ -194,6 +255,8 @@ pause >nul
 goto rename
 :move_ok
 
+{extra_copy_commands}
+
 echo.
 echo 更新が完了しました。gv3 を起動します...
 start "" "{target}"
@@ -205,6 +268,7 @@ del "%~f0" & exit
         old = old_exe.display(),
         old_name = old_exe.file_name().unwrap().to_string_lossy(),
         target_name = target_exe.file_name().unwrap().to_string_lossy(),
+        extra_copy_commands = extra_copy_commands,
     );
 
     // Rustのformat!はLFのみ出力するが、cmd.exeのDBCSパーサーは
@@ -374,7 +438,7 @@ mod tests {
 
         // 存在しないPIDでバッチ生成（wait_exitを即通過）
         let batch_path = dir.join("update.bat");
-        generate_update_batch(&batch_path, &update, &target, 1).unwrap();
+        generate_update_batch(&batch_path, &update, &target, &[], 1).unwrap();
 
         // start と del 行を無効化してテスト用バッチを作成
         let bytes = std::fs::read(&batch_path).unwrap();
@@ -432,7 +496,7 @@ mod tests {
         std::fs::write(&old, b"STALE_OLD").unwrap();
 
         let batch_path = dir.join("update.bat");
-        generate_update_batch(&batch_path, &update, &target, 1).unwrap();
+        generate_update_batch(&batch_path, &update, &target, &[], 1).unwrap();
 
         let bytes = std::fs::read(&batch_path).unwrap();
         let bytes = neutralize_batch_line(&bytes, b"start ");
@@ -460,5 +524,77 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn batch_execution_copies_extra_files() {
+        // exe更新と同時に追加ファイル（*.default.toml, README.md等）もコピーされることを確認
+        let base_dir = std::env::temp_dir().join("gv3_test_batch_extra");
+        let _ = std::fs::remove_dir_all(&base_dir);
+        // exeのあるディレクトリと、展開先の一時ディレクトリを分離
+        let install_dir = base_dir.join("install");
+        let temp_dir = base_dir.join("temp");
+        std::fs::create_dir_all(&install_dir).unwrap();
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let target = install_dir.join("gv3.exe");
+        let update = temp_dir.join("gv3_update.exe");
+        std::fs::write(&target, b"OLD_EXE").unwrap();
+        std::fs::write(&update, b"NEW_EXE").unwrap();
+
+        // 追加ファイルを一時ディレクトリに作成（ZIP展開後の状態を再現）
+        let extra1 = temp_dir.join("gv3.default.toml");
+        let extra2 = temp_dir.join("README.md");
+        std::fs::write(&extra1, b"NEW_TOML").unwrap();
+        std::fs::write(&extra2, b"NEW_README").unwrap();
+
+        // 既存の追加ファイルも配置（上書きされることを確認）
+        std::fs::write(install_dir.join("gv3.default.toml"), b"OLD_TOML").unwrap();
+        std::fs::write(install_dir.join("README.md"), b"OLD_README").unwrap();
+
+        let batch_path = temp_dir.join("update.bat");
+        generate_update_batch(
+            &batch_path,
+            &update,
+            &target,
+            &[extra1.clone(), extra2.clone()],
+            1,
+        )
+        .unwrap();
+
+        let bytes = std::fs::read(&batch_path).unwrap();
+        let bytes = neutralize_batch_line(&bytes, b"start ");
+        let bytes = neutralize_batch_line(&bytes, b"del ");
+        let test_batch = temp_dir.join("update_test.bat");
+        std::fs::write(&test_batch, bytes).unwrap();
+
+        let output = std::process::Command::new("cmd.exe")
+            .args(["/c", &test_batch.display().to_string()])
+            .output()
+            .expect("cmd.exe実行失敗");
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        // exe が更新されていること
+        assert_eq!(
+            std::fs::read(&target).unwrap(),
+            b"NEW_EXE",
+            "gv3.exe が更新されるべき\nstdout: {stdout}\nstderr: {stderr}"
+        );
+
+        // 追加ファイルがコピーされていること
+        assert_eq!(
+            std::fs::read(install_dir.join("gv3.default.toml")).unwrap(),
+            b"NEW_TOML",
+            "gv3.default.toml が更新されるべき\nstdout: {stdout}\nstderr: {stderr}"
+        );
+        assert_eq!(
+            std::fs::read(install_dir.join("README.md")).unwrap(),
+            b"NEW_README",
+            "README.md が更新されるべき\nstdout: {stdout}\nstderr: {stderr}"
+        );
+
+        let _ = std::fs::remove_dir_all(&base_dir);
     }
 }
