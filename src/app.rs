@@ -865,14 +865,9 @@ impl AppWindow {
                             // 通常ファイル: SHFileOperationWでUndo対応の移動
                             match crate::file_ops::move_single_file(self.hwnd, &path, &dest) {
                                 Ok(true) => {
-                                    // 同一フォルダ内（リネーム）ならリスト内エントリを更新
-                                    if path.parent() == dest.parent() {
-                                        if let Err(e) = self.document.rename_current_in_list(&dest)
-                                        {
-                                            self.show_error_title(&format!("リスト更新失敗: {e}"));
-                                        }
-                                    } else {
-                                        self.document.remove_current_from_list();
+                                    // 移動先パスでリスト内エントリを更新（異フォルダでも追跡）
+                                    if let Err(e) = self.document.rename_current_in_list(&dest) {
+                                        self.show_error_title(&format!("リスト更新失敗: {e}"));
                                     }
                                     self.process_document_events();
                                 }
@@ -985,7 +980,11 @@ impl AppWindow {
                 ) {
                     let path_refs: Vec<&Path> = paths.iter().map(|p| p.as_path()).collect();
                     if let Ok(true) = crate::file_ops::move_files(self.hwnd, &path_refs, &dest) {
-                        self.document.remove_marked_from_list();
+                        // パス更新失敗時は従来通りリストから削除（フォールバック）
+                        if let Err(e) = self.document.update_marked_paths(&dest) {
+                            eprintln!("パス更新失敗、リストから削除: {e}");
+                            self.document.remove_marked_from_list();
+                        }
                         self.process_document_events();
                     }
                 }

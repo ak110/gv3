@@ -1,5 +1,8 @@
 # ぐらびゅ3
 
+[![CI](https://github.com/ak110/gv3/actions/workflows/ci.yml/badge.svg)](https://github.com/ak110/gv3/actions/workflows/ci.yml)
+[![Release](https://github.com/ak110/gv3/actions/workflows/release.yml/badge.svg)](https://github.com/ak110/gv3/actions/workflows/release.yml)
+
 Windows用の軽量画像ビューアーです。先読みエンジンにより、大量の画像をサクサク閲覧できます。
 
 ## 動作環境

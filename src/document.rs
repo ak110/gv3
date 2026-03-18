@@ -710,6 +710,13 @@ impl Document {
         self.after_list_change();
     }
 
+    /// マーク済みファイルのパスを移動先ディレクトリに更新する
+    pub fn update_marked_paths(&mut self, dest_dir: &Path) -> Result<()> {
+        self.file_list.update_marked_paths(dest_dir)?;
+        self.after_list_change();
+        Ok(())
+    }
+
     /// 現在のファイルをリスト内でリネーム（同一フォルダ内の移動後）
     /// 先読みキャッシュを無効化し、再ソート後の位置に追従する
     pub fn rename_current_in_list(&mut self, new_path: &Path) -> Result<()> {

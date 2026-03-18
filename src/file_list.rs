@@ -472,6 +472,37 @@ impl FileList {
         false
     }
 
+    /// マーク済みファイルのパスを移動先ディレクトリに更新する
+    /// 各エントリを `dest_dir/元ファイル名` で再構築し、マーク状態は維持する
+    pub fn update_marked_paths(&mut self, dest_dir: &Path) -> Result<()> {
+        let current_info = self.current().map(|f| (f.path.clone(), f.source.clone()));
+
+        for info in &mut self.files {
+            if !info.marked {
+                continue;
+            }
+            let file_name = info
+                .path
+                .file_name()
+                .ok_or_else(|| anyhow::anyhow!("ファイル名取得失敗: {}", info.path.display()))?;
+            let new_path = dest_dir.join(file_name);
+            let new_info = FileInfo::from_path(&new_path)?;
+            info.path = new_info.path;
+            info.source = FileSource::File(new_path);
+            info.file_name = new_info.file_name;
+            info.file_size = new_info.file_size;
+            info.modified = new_info.modified;
+            // marked状態は維持（trueのまま）
+        }
+
+        // 再ソートして現在位置を復元
+        self.sort(self.sort_order);
+        if let Some((path, source)) = current_info {
+            self.restore_current_position(&path, &source);
+        }
+        Ok(())
+    }
+
     /// ファイルのグループキーを返す（フォルダ=親ディレクトリ or アーカイブパス）
     fn group_key(info: &FileInfo) -> GroupKey {
         match &info.source {
@@ -1096,5 +1127,44 @@ mod tests {
             .map(|&i| fl.files[i].file_name.as_str())
             .collect();
         assert_eq!(b_names, vec!["b1.png", "b2.png"]);
+    }
+
+    #[test]
+    fn update_marked_paths_moves_to_dest_dir() {
+        let src_dir = std::env::temp_dir().join("gv3_test_fl_update_marked_src");
+        let dest_dir = std::env::temp_dir().join("gv3_test_fl_update_marked_dest");
+        create_test_files(&src_dir, &["a.png", "b.png", "c.png"]);
+        let _ = std::fs::create_dir_all(&dest_dir);
+        // 移動先にもファイルを作成（from_pathが成功するように）
+        create_test_files(&dest_dir, &["a.png", "c.png"]);
+
+        let mut fl = FileList::new(test_registry());
+        fl.populate_from_folder(&src_dir).unwrap();
+        fl.navigate_to(1); // b.png を選択
+
+        // a.png と c.png をマーク
+        fl.mark_at(0);
+        fl.mark_at(2);
+
+        fl.update_marked_paths(&dest_dir).unwrap();
+
+        // マーク済みファイルのパスが更新されている
+        let marked: Vec<&FileInfo> = fl.files.iter().filter(|f| f.marked).collect();
+        assert_eq!(marked.len(), 2);
+        for f in &marked {
+            assert!(f.path.starts_with(&dest_dir));
+        }
+
+        // 非マークファイル（b.png）はsrc_dirのまま
+        let unmarked: Vec<&FileInfo> = fl.files.iter().filter(|f| !f.marked).collect();
+        assert_eq!(unmarked.len(), 1);
+        assert_eq!(unmarked[0].file_name, "b.png");
+        assert!(unmarked[0].path.starts_with(&src_dir));
+
+        // 現在位置がb.pngを指している（復元されている）
+        assert_eq!(fl.current().unwrap().file_name, "b.png");
+
+        cleanup(&src_dir);
+        cleanup(&dest_dir);
     }
 }
