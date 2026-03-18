@@ -271,6 +271,7 @@ impl AppWindow {
                     let doc = &self.document;
                     self.file_list_panel
                         .update(doc.file_list(), |i| doc.is_cached(i));
+                    self.update_title(); // リスト変更（削除等）でタイトルを同期
                 }
                 DocumentEvent::Error(msg) => {
                     self.show_error_title(&msg);
@@ -1018,7 +1019,7 @@ impl AppWindow {
                 ) {
                     let path_refs: Vec<&Path> = paths.iter().map(|p| p.as_path()).collect();
                     if let Err(e) = crate::file_ops::copy_files(self.hwnd, &path_refs, &dest) {
-                        eprintln!("ファイルコピー失敗: {e}");
+                        self.show_error_title(&format!("ファイルコピー失敗: {e}"));
                     }
                 }
             }
@@ -1032,7 +1033,7 @@ impl AppWindow {
                 if let Some(image) = self.document.current_image()
                     && let Err(e) = crate::clipboard::copy_image_to_clipboard(self.hwnd, image)
                 {
-                    eprintln!("画像コピー失敗: {e}");
+                    self.show_error_title(&format!("画像コピー失敗: {e}"));
                 }
             }
             Action::CopyFileName => {
@@ -1040,7 +1041,7 @@ impl AppWindow {
                     && let Err(e) =
                         crate::clipboard::copy_text_to_clipboard(self.hwnd, &source.display_path())
                 {
-                    eprintln!("ファイル名コピー失敗: {e}");
+                    self.show_error_title(&format!("ファイル名コピー失敗: {e}"));
                 }
             }
             Action::MarkedCopyNames => {
@@ -1054,7 +1055,7 @@ impl AppWindow {
                 if !names.is_empty() {
                     let text = names.join("\r\n");
                     if let Err(e) = crate::clipboard::copy_text_to_clipboard(self.hwnd, &text) {
-                        eprintln!("マークファイル名コピー失敗: {e}");
+                        self.show_error_title(&format!("マークファイル名コピー失敗: {e}"));
                     }
                 }
             }
@@ -1116,6 +1117,7 @@ impl AppWindow {
             Action::CloseAll => {
                 self.document.close_all();
                 self.process_document_events();
+                self.update_title(); // close_all()はNavigationChangedを発行しないため明示的に更新
             }
             Action::OpenContainingFolder => {
                 if let Some(source) = self.document.current_source() {
@@ -1168,7 +1170,7 @@ impl AppWindow {
                 if let Err(e) =
                     crate::bookmark::save_bookmark(self.hwnd, self.document.file_list(), idx)
                 {
-                    eprintln!("ブックマーク保存失敗: {e}");
+                    self.show_error_title(&format!("ブックマーク保存失敗: {e}"));
                 }
             }
             Action::BookmarkLoad => {
