@@ -19,20 +19,13 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
-      - run: cargo fmt --check
-      - run: cargo clippy -- -D warnings
-      - run: cargo test
+      - uses: jdx/mise-action@v3
+      - run: mise run lint-rust
 
   docs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
+      - uses: jdx/mise-action@v3
       - run: pnpm install --frozen-lockfile
-      - run: pnpm run textlint
-      - run: pnpm run markdownlint
-      - run: pnpm run prettier:check
+      - run: mise run lint-docs

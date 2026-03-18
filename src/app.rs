@@ -867,12 +867,9 @@ impl AppWindow {
                                 Ok(true) => {
                                     // 同一フォルダ内（リネーム）ならリスト内エントリを更新
                                     if path.parent() == dest.parent() {
-                                        if let Err(e) =
-                                            self.document.rename_current_in_list(&dest)
+                                        if let Err(e) = self.document.rename_current_in_list(&dest)
                                         {
-                                            self.show_error_title(&format!(
-                                                "リスト更新失敗: {e}"
-                                            ));
+                                            self.show_error_title(&format!("リスト更新失敗: {e}"));
                                         }
                                     } else {
                                         self.document.remove_current_from_list();
@@ -888,12 +885,9 @@ impl AppWindow {
                         crate::file_info::FileSource::ArchiveEntry { on_demand, .. } => {
                             // アーカイブエントリ: 書き出し（リスト除去なし）
                             let result = if *on_demand {
-                                self.document
-                                    .read_file_data_current()
-                                    .and_then(|data| {
-                                        std::fs::write(&dest, &data)
-                                            .map_err(anyhow::Error::from)
-                                    })
+                                self.document.read_file_data_current().and_then(|data| {
+                                    std::fs::write(&dest, &data).map_err(anyhow::Error::from)
+                                })
                             } else {
                                 std::fs::copy(&path, &dest)
                                     .map(|_| ())
@@ -930,12 +924,9 @@ impl AppWindow {
                             }
                         ) {
                             // オンデマンド: アーカイブから読み出して書き出し
-                            self.document
-                                .read_file_data_current()
-                                .and_then(|data| {
-                                    std::fs::write(&dest, &data)
-                                        .map_err(anyhow::Error::from)
-                                })
+                            self.document.read_file_data_current().and_then(|data| {
+                                std::fs::write(&dest, &data).map_err(anyhow::Error::from)
+                            })
                         } else {
                             // 通常ファイル/temp展開済み/PDF: 既存のfs::copy
                             std::fs::copy(&current.path, &dest)

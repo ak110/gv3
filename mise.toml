@@ -1,0 +1,55 @@
+[tools]
+node = "22"
+pnpm = "9"
+
+[tasks.fmt-check]
+description = "cargo fmt --check"
+run = "cargo fmt --check"
+
+[tasks.clippy]
+description = "cargo clippy"
+run = "cargo clippy -- -D warnings"
+
+[tasks.test]
+description = "cargo test"
+run = "cargo test"
+
+[tasks.textlint]
+description = "textlint docs"
+run = "pnpm run textlint"
+
+[tasks.markdownlint]
+description = "markdownlint docs"
+run = "pnpm run markdownlint"
+
+[tasks.prettier-check]
+description = "prettier --check"
+run = "pnpm run prettier:check"
+
+[tasks.lint-rust]
+description = "Run all Rust checks"
+depends = ["fmt-check", "clippy", "test"]
+
+[tasks.lint-docs]
+description = "Run all doc checks"
+depends = ["textlint", "markdownlint", "prettier-check"]
+
+[tasks.lint]
+description = "Run all lint checks"
+depends = ["lint-rust", "lint-docs"]
+
+[tasks.textlint-fix]
+description = "textlint --fix"
+run = "pnpm run textlint:fix"
+
+[tasks.markdownlint-fix]
+description = "markdownlint --fix"
+run = "pnpm run markdownlint:fix"
+
+[tasks.prettier-fix]
+description = "prettier --write"
+run = "pnpm run prettier:fix"
+
+[tasks.lint-fix]
+description = "Run all fixable lints"
+depends = ["textlint-fix", "markdownlint-fix", "prettier-fix"]

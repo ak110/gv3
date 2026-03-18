@@ -4,6 +4,7 @@
 
 - [rustup](https://rustup.rs/)（Rustツールチェーン）
 - Visual Studio Build Tools（C++ ビルドツール）
+- [mise](https://mise.jdx.dev/)（タスクランナー・ツールバージョン管理）
 
 ## ビルド手順
 
@@ -25,23 +26,40 @@ REM フォーマット
 cargo fmt
 ```
 
-## Git フックのセットアップ
+## 初回セットアップ
 
-`git push`時に自動でlint・テストを実行するpre-pushフックを用意している。
+```cmd
+REM ツールのインストール（Node.js, pnpm）
+mise install
 
-```powershell
-# 初回セットアップ（リポジトリごとに1回）
-powershell -ExecutionPolicy Bypass -File scripts/setup-hooks.ps1
+REM ドキュメントlint用の依存パッケージをインストール
+pnpm install
 
-# 手動で全チェックを実行する場合
-powershell -ExecutionPolicy Bypass -File scripts/lint-all.ps1
+REM Git pre-pushフックを有効化
+git config core.hooksPath .githooks
 ```
 
-`lint-all.ps1` は `cargo fmt --check`、`cargo clippy -- -D warnings`、`cargo test` を順に実行する。
-pre-pushフック自体はGit for Windowsのbashで実行されるため`.sh`も同梱している。
+## Lintの実行
 
-```powershell
-# フックを無効化する場合
+```cmd
+REM 全チェック（Rust + ドキュメント）
+mise run lint
+
+REM Rustのみ（fmt, clippy, test）
+mise run lint-rust
+
+REM ドキュメントのみ（textlint, markdownlint, prettier）
+mise run lint-docs
+
+REM 自動修正可能なドキュメントlintを修正
+mise run lint-fix
+```
+
+`git push`時にはpre-pushフックが自動で`mise run lint-rust`を実行する。
+`node_modules`がある場合は`mise run lint-docs`も実行される。
+
+```cmd
+REM フックを無効化する場合
 git config --unset core.hooksPath
 ```
 

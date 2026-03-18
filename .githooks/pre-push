@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # pre-push hook: push前にlintチェックを実行
 set -euo pipefail
-
-# リポジトリルートに移動
 cd "$(git rev-parse --show-toplevel)"
 
-exec bash scripts/lint-all.sh
+mise run lint-rust
+if [ -d "node_modules" ]; then
+    mise run lint-docs
+fi
