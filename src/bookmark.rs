@@ -43,6 +43,8 @@ pub fn save_bookmark(
         "ぐらびゅ3ブックマーク",
         "*.gv3bm",
         Some(&dir),
+        None,
+        None,
     )?;
 
     let Some(save_path) = save_path else {

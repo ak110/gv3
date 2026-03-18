@@ -844,45 +844,62 @@ impl AppWindow {
                 let initial_dir = source.parent_dir().map(|p| p.to_path_buf());
                 let default_name = source.default_save_name();
 
+                // ファイルソースに応じてダイアログのラベルを分岐
+                let (dialog_title, dialog_button) = match &source {
+                    crate::file_info::FileSource::File(_) => ("ファイルを移動", "移動"),
+                    _ => ("ファイルを書き出す", "書き出す"),
+                };
+
                 if let Ok(Some(dest)) = crate::file_ops::save_file_dialog(
                     self.hwnd,
                     &default_name,
                     "すべてのファイル",
                     "*.*",
                     initial_dir.as_deref(),
+                    Some(dialog_title),
+                    Some(dialog_button),
                 ) {
                     match &source {
                         crate::file_info::FileSource::File(_) => {
                             // 通常ファイル: SHFileOperationWでUndo対応の移動
-                            if let Ok(true) =
-                                crate::file_ops::move_single_file(self.hwnd, &path, &dest)
-                            {
-                                // 同一フォルダ内（リネーム）ならリスト内エントリを更新
-                                if path.parent() == dest.parent() {
-                                    if let Err(e) = self.document.rename_current_in_list(&dest) {
-                                        eprintln!("リスト更新失敗: {e}");
+                            match crate::file_ops::move_single_file(self.hwnd, &path, &dest) {
+                                Ok(true) => {
+                                    // 同一フォルダ内（リネーム）ならリスト内エントリを更新
+                                    if path.parent() == dest.parent() {
+                                        if let Err(e) =
+                                            self.document.rename_current_in_list(&dest)
+                                        {
+                                            self.show_error_title(&format!(
+                                                "リスト更新失敗: {e}"
+                                            ));
+                                        }
+                                    } else {
+                                        self.document.remove_current_from_list();
                                     }
-                                } else {
-                                    self.document.remove_current_from_list();
+                                    self.process_document_events();
                                 }
-                                self.process_document_events();
+                                Ok(false) => {} // ユーザーキャンセル
+                                Err(e) => {
+                                    self.show_error_title(&format!("ファイル移動失敗: {e}"));
+                                }
                             }
                         }
                         crate::file_info::FileSource::ArchiveEntry { on_demand, .. } => {
                             // アーカイブエントリ: 書き出し（リスト除去なし）
-                            if *on_demand {
-                                match self.document.read_file_data_current() {
-                                    Ok(data) => {
-                                        if let Err(e) = std::fs::write(&dest, &data) {
-                                            eprintln!("ファイル書き出し失敗: {e}");
-                                        }
-                                    }
-                                    Err(e) => eprintln!("ファイル書き出し失敗: {e}"),
-                                }
+                            let result = if *on_demand {
+                                self.document
+                                    .read_file_data_current()
+                                    .and_then(|data| {
+                                        std::fs::write(&dest, &data)
+                                            .map_err(anyhow::Error::from)
+                                    })
                             } else {
-                                if let Err(e) = std::fs::copy(&path, &dest) {
-                                    eprintln!("ファイル書き出し失敗: {e}");
-                                }
+                                std::fs::copy(&path, &dest)
+                                    .map(|_| ())
+                                    .map_err(anyhow::Error::from)
+                            };
+                            if let Err(e) = result {
+                                self.show_error_title(&format!("ファイル書き出し失敗: {e}"));
                             }
                         }
                         crate::file_info::FileSource::PdfPage { .. } => {
@@ -901,8 +918,10 @@ impl AppWindow {
                         "すべてのファイル",
                         "*.*",
                         initial_dir.as_deref(),
+                        Some("ファイルを複製"),
+                        Some("複製"),
                     ) {
-                        if matches!(
+                        let result = if matches!(
                             current.source,
                             crate::file_info::FileSource::ArchiveEntry {
                                 on_demand: true,
@@ -910,19 +929,20 @@ impl AppWindow {
                             }
                         ) {
                             // オンデマンド: アーカイブから読み出して書き出し
-                            match self.document.read_file_data_current() {
-                                Ok(data) => {
-                                    if let Err(e) = std::fs::write(&dest, &data) {
-                                        eprintln!("ファイルコピー失敗: {e}");
-                                    }
-                                }
-                                Err(e) => eprintln!("ファイルコピー失敗: {e}"),
-                            }
+                            self.document
+                                .read_file_data_current()
+                                .and_then(|data| {
+                                    std::fs::write(&dest, &data)
+                                        .map_err(anyhow::Error::from)
+                                })
                         } else {
                             // 通常ファイル/temp展開済み/PDF: 既存のfs::copy
-                            if let Err(e) = std::fs::copy(&current.path, &dest) {
-                                eprintln!("ファイルコピー失敗: {e}");
-                            }
+                            std::fs::copy(&current.path, &dest)
+                                .map(|_| ())
+                                .map_err(anyhow::Error::from)
+                        };
+                        if let Err(e) = result {
+                            self.show_error_title(&format!("ファイルコピー失敗: {e}"));
                         }
                     }
                 }
@@ -1281,6 +1301,8 @@ impl AppWindow {
             filter_name,
             filter_spec,
             initial_dir.as_deref(),
+            None,
+            None,
         )
         .ok()
         .flatten() else {
@@ -1290,12 +1312,12 @@ impl AppWindow {
         // DecodedImage (RGBA) → image::RgbaImage → encode
         let Some(img_buf) = image::RgbaImage::from_raw(img.width, img.height, img.data.clone())
         else {
-            eprintln!("画像バッファ作成失敗");
+            self.show_error_title("画像バッファ作成失敗");
             return;
         };
 
         if let Err(e) = img_buf.save(&save_path) {
-            eprintln!("画像書き出し失敗: {e}");
+            self.show_error_title(&format!("画像書き出し失敗: {e}"));
         }
     }
 

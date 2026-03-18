@@ -1,10 +1,11 @@
 //! Win32 Shell APIによるファイル操作 + ダイアログ
 
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
 use windows::Win32::Foundation::HWND;
-use windows::Win32::UI::Shell::{FO_COPY, FO_DELETE, FO_MOVE, FOF_ALLOWUNDO};
+use windows::Win32::UI::Shell::{FO_COPY, FO_DELETE, FO_MOVE, FOF_ALLOWUNDO, FOF_MULTIDESTFILES};
 use windows::Win32::UI::Shell::{
     FOS_FILEMUSTEXIST, FOS_FORCEFILESYSTEM, FOS_OVERWRITEPROMPT, FOS_PATHMUSTEXIST,
     FOS_PICKFOLDERS, IFileOpenDialog, IFileSaveDialog, SHFILEOPSTRUCTW, SHFileOperationW,
@@ -39,6 +40,7 @@ pub fn delete_to_recycle_bin(hwnd: HWND, paths: &[&Path]) -> Result<bool> {
 }
 
 /// ファイルを移動する（SHFileOperationW）
+/// pToはディレクトリ（複数ファイルを一つのフォルダに移動）
 pub fn move_files(hwnd: HWND, paths: &[&Path], dest: &Path) -> Result<bool> {
     if paths.is_empty() {
         return Ok(false);
@@ -61,7 +63,10 @@ pub fn move_files(hwnd: HWND, paths: &[&Path], dest: &Path) -> Result<bool> {
         if op.fAnyOperationsAborted.as_bool() {
             return Ok(false);
         }
-        anyhow::bail!("ファイル移動に失敗しました (code: {result})");
+        anyhow::bail!(
+            "ファイル移動に失敗しました (code: 0x{result:04X})\n  dest: {}",
+            dest.display()
+        );
     }
     Ok(!op.fAnyOperationsAborted.as_bool())
 }
@@ -111,7 +116,7 @@ pub fn open_file_dialog(hwnd: HWND, initial_dir: Option<&Path>) -> Result<Option
         if let Some(dir) = initial_dir
             && let Some(item) = create_shell_item(dir)
         {
-            let _ = dialog.SetFolder(&item);
+            dialog.SetFolder(&item)?;
         }
 
         // 画像ファイルフィルタ
@@ -177,7 +182,7 @@ pub fn select_folder_dialog(
         if let Some(dir) = initial_dir
             && let Some(item) = create_shell_item(dir)
         {
-            let _ = dialog.SetFolder(&item);
+            dialog.SetFolder(&item)?;
         }
 
         match dialog.Show(Some(hwnd)) {
@@ -196,12 +201,15 @@ pub fn select_folder_dialog(
 
 /// 保存先ダイアログ（IFileSaveDialog）
 /// `initial_dir`が指定されていればそのフォルダを初期表示する
+/// `title`/`ok_button_label`でダイアログのタイトルとOKボタンのラベルをカスタマイズ可能
 pub fn save_file_dialog(
     hwnd: HWND,
     default_name: &str,
     filter_name: &str,
     filter_ext: &str,
     initial_dir: Option<&Path>,
+    title: Option<&str>,
+    ok_button_label: Option<&str>,
 ) -> Result<Option<PathBuf>> {
     unsafe {
         let dialog: IFileSaveDialog = windows::Win32::System::Com::CoCreateInstance(
@@ -214,11 +222,21 @@ pub fn save_file_dialog(
         let options = dialog.GetOptions()?;
         dialog.SetOptions(options | FOS_FORCEFILESYSTEM | FOS_OVERWRITEPROMPT)?;
 
+        // タイトル・OKボタンラベルのカスタマイズ
+        if let Some(t) = title {
+            let wide: Vec<u16> = t.encode_utf16().chain(std::iter::once(0)).collect();
+            dialog.SetTitle(windows::core::PCWSTR(wide.as_ptr()))?;
+        }
+        if let Some(label) = ok_button_label {
+            let wide: Vec<u16> = label.encode_utf16().chain(std::iter::once(0)).collect();
+            dialog.SetOkButtonLabel(windows::core::PCWSTR(wide.as_ptr()))?;
+        }
+
         // 初期ディレクトリ設定
         if let Some(dir) = initial_dir
             && let Some(item) = create_shell_item(dir)
         {
-            let _ = dialog.SetFolder(&item);
+            dialog.SetFolder(&item)?;
         }
 
         // フィルタ設定
@@ -274,7 +292,7 @@ pub fn open_bookmark_dialog(hwnd: HWND) -> Result<Option<PathBuf>> {
         let bookmark_dir = crate::bookmark::bookmark_dir();
         let _ = std::fs::create_dir_all(&bookmark_dir);
         if let Some(item) = create_shell_item(&bookmark_dir) {
-            let _ = dialog.SetFolder(&item);
+            dialog.SetFolder(&item)?;
         }
 
         // フィルタ: ブックマーク + すべてのファイル
@@ -320,7 +338,8 @@ pub fn move_single_file(hwnd: HWND, src: &Path, dest: &Path) -> Result<bool> {
         wFunc: FO_MOVE,
         pFrom: windows::core::PCWSTR(from.as_ptr()),
         pTo: windows::core::PCWSTR(to.as_ptr()),
-        fFlags: FOF_ALLOWUNDO.0 as u16,
+        // FOF_MULTIDESTFILES: pToをディレクトリではなくファイルパスとして解釈させる
+        fFlags: (FOF_ALLOWUNDO.0 | FOF_MULTIDESTFILES.0) as u16,
         ..Default::default()
     };
 
@@ -329,7 +348,11 @@ pub fn move_single_file(hwnd: HWND, src: &Path, dest: &Path) -> Result<bool> {
         if op.fAnyOperationsAborted.as_bool() {
             return Ok(false);
         }
-        anyhow::bail!("ファイル移動に失敗しました (code: {result})");
+        anyhow::bail!(
+            "ファイル移動に失敗しました (code: 0x{result:04X})\n  src: {}\n  dest: {}",
+            src.display(),
+            dest.display()
+        );
     }
     Ok(!op.fAnyOperationsAborted.as_bool())
 }
@@ -354,6 +377,7 @@ fn create_shell_item(dir: &Path) -> Option<windows::Win32::UI::Shell::IShellItem
 fn build_multi_path_string(paths: &[&Path]) -> Vec<u16> {
     let mut result = Vec::new();
     for path in paths {
+        let path = strip_extended_length_prefix(path);
         result.extend(path.as_os_str().encode_wide());
         result.push(0); // 各パスの後にNUL
     }
@@ -361,8 +385,21 @@ fn build_multi_path_string(paths: &[&Path]) -> Vec<u16> {
     result
 }
 
+/// extended-length pathプレフィックス（\\?\）を除去する
+/// SHFileOperationWは\\?\形式をサポートしないため、
+/// Rustのcanonicalize()が返すパスを変換する必要がある
+fn strip_extended_length_prefix(path: &Path) -> Cow<'_, Path> {
+    let s = path.to_string_lossy();
+    if let Some(stripped) = s.strip_prefix(r"\\?\") {
+        Cow::Owned(PathBuf::from(stripped))
+    } else {
+        Cow::Borrowed(path)
+    }
+}
+
 /// SHFileOperationW用のダブルNUL終端パス文字列を構築する（単一パス）
 fn build_single_path_string(path: &Path) -> Vec<u16> {
+    let path = strip_extended_length_prefix(path);
     let mut result: Vec<u16> = path.as_os_str().encode_wide().collect();
     result.push(0);
     result.push(0);

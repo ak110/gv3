@@ -525,8 +525,17 @@ impl Document {
     }
 
     /// パスを正規化する（相対パスやUNCパス対応）
+    /// Rustのcanonicalize()は\\?\プレフィックスを付与するが、
+    /// SHFileOperationW等のShell APIが非対応のため除去する
     fn canonicalize(path: &Path) -> Result<PathBuf> {
-        std::fs::canonicalize(path).with_context(|| format!("パス解決失敗: {}", path.display()))
+        let canonical = std::fs::canonicalize(path)
+            .with_context(|| format!("パス解決失敗: {}", path.display()))?;
+        let s = canonical.to_string_lossy();
+        if let Some(stripped) = s.strip_prefix(r"\\?\") {
+            Ok(PathBuf::from(stripped))
+        } else {
+            Ok(canonical)
+        }
     }
 
     /// FileInfoからファイルデータを読み出す（オンデマンドアーカイブ対応）
