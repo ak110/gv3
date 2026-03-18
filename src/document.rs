@@ -701,6 +701,22 @@ impl Document {
         self.after_list_change();
     }
 
+    /// 現在のファイルをリスト内でリネーム（同一フォルダ内の移動後）
+    /// 先読みキャッシュを無効化し、再ソート後の位置に追従する
+    pub fn rename_current_in_list(&mut self, new_path: &Path) -> Result<()> {
+        let index = self
+            .file_list
+            .current_index()
+            .ok_or_else(|| anyhow::anyhow!("ファイルが選択されていません"))?;
+        self.file_list.update_file_at(index, new_path)?;
+        self.invalidate_cache();
+        let _ = self.event_sender.send(DocumentEvent::FileListChanged);
+        if self.file_list.len() > 0 {
+            let _ = self.load_current();
+        }
+        Ok(())
+    }
+
     /// リスト変更後の共通処理（キャッシュ無効化+再読込+イベント送信）
     pub fn after_list_change(&mut self) {
         self.invalidate_cache();

@@ -45,6 +45,16 @@ pre-pushフック自体はGit for Windowsのbashで実行されるため`.sh`も
 git config --unset core.hooksPath
 ```
 
+## キーバインド定義の管理
+
+デフォルトキーバインドは以下の3箇所で定義されている。変更時は全箇所を同期すること。
+
+| ファイル | 役割 |
+|---------|------|
+| `src/ui/key_config.rs` (`default_bindings()`) | 設定ファイル未指定時のハードコードデフォルト |
+| `gv3.keys.default.toml` | ユーザー配布用のデフォルト設定テンプレート |
+| `docs/keybindings.md` | ドキュメント上のデフォルトキーバインド一覧 |
+
 ## 依存パッケージの更新
 
 ```cmd

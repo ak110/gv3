@@ -62,6 +62,57 @@ impl FileSource {
             FileSource::ArchiveEntry { .. } | FileSource::PdfPage { .. }
         )
     }
+
+    /// ダイアログ初期ディレクトリ用: ソースの親ディレクトリを返す
+    pub fn parent_dir(&self) -> Option<&Path> {
+        match self {
+            FileSource::File(path) => path.parent(),
+            FileSource::ArchiveEntry { archive, .. } => archive.parent(),
+            FileSource::PdfPage { pdf_path, .. } => pdf_path.parent(),
+        }
+    }
+
+    /// ダイアログ用デフォルトファイル名を返す
+    pub fn default_save_name(&self) -> String {
+        match self {
+            FileSource::File(path) => path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("image")
+                .to_string(),
+            FileSource::ArchiveEntry { archive, entry, .. } => {
+                let archive_stem = archive
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("archive");
+                let entry_filename = Path::new(entry)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("image");
+                format!("{archive_stem}_{entry_filename}")
+            }
+            FileSource::PdfPage {
+                pdf_path,
+                page_index,
+            } => {
+                let stem = pdf_path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("pdf");
+                format!("{stem}_page{}.png", page_index + 1)
+            }
+        }
+    }
+
+    /// ダイアログ用デフォルトstem（拡張子なし）を返す（エクスポート用）
+    pub fn default_save_stem(&self) -> String {
+        let name = self.default_save_name();
+        Path::new(&name)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("image")
+            .to_string()
+    }
 }
 
 impl fmt::Display for FileSource {
@@ -179,5 +230,62 @@ mod tests {
     fn from_path_nonexistent() {
         let result = FileInfo::from_path(Path::new("nonexistent_file_xyz.png"));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn parent_dir_for_each_source() {
+        let file = FileSource::File(PathBuf::from(r"C:\images\test.jpg"));
+        assert_eq!(file.parent_dir().unwrap(), Path::new(r"C:\images"));
+
+        let archive = FileSource::ArchiveEntry {
+            archive: PathBuf::from(r"C:\archives\photos.zip"),
+            entry: "folder/sunset.png".to_string(),
+            on_demand: true,
+        };
+        assert_eq!(archive.parent_dir().unwrap(), Path::new(r"C:\archives"));
+
+        let pdf = FileSource::PdfPage {
+            pdf_path: PathBuf::from(r"C:\docs\report.pdf"),
+            page_index: 0,
+        };
+        assert_eq!(pdf.parent_dir().unwrap(), Path::new(r"C:\docs"));
+    }
+
+    #[test]
+    fn default_save_name_for_each_source() {
+        let file = FileSource::File(PathBuf::from(r"C:\images\sunset.jpg"));
+        assert_eq!(file.default_save_name(), "sunset.jpg");
+
+        let archive = FileSource::ArchiveEntry {
+            archive: PathBuf::from(r"C:\photos.zip"),
+            entry: "folder/sunset.png".to_string(),
+            on_demand: false,
+        };
+        assert_eq!(archive.default_save_name(), "photos_sunset.png");
+
+        let pdf = FileSource::PdfPage {
+            pdf_path: PathBuf::from(r"C:\docs\report.pdf"),
+            page_index: 2,
+        };
+        assert_eq!(pdf.default_save_name(), "report_page3.png");
+    }
+
+    #[test]
+    fn default_save_stem_strips_extension() {
+        let file = FileSource::File(PathBuf::from(r"C:\images\sunset.jpg"));
+        assert_eq!(file.default_save_stem(), "sunset");
+
+        let archive = FileSource::ArchiveEntry {
+            archive: PathBuf::from(r"C:\photos.zip"),
+            entry: "img.png".to_string(),
+            on_demand: false,
+        };
+        assert_eq!(archive.default_save_stem(), "photos_img");
+
+        let pdf = FileSource::PdfPage {
+            pdf_path: PathBuf::from(r"C:\doc.pdf"),
+            page_index: 0,
+        };
+        assert_eq!(pdf.default_save_stem(), "doc_page1");
     }
 }

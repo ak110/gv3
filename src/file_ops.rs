@@ -95,7 +95,7 @@ pub fn copy_files(hwnd: HWND, paths: &[&Path], dest: &Path) -> Result<bool> {
 }
 
 /// ファイル選択ダイアログ（IFileOpenDialog）
-pub fn open_file_dialog(hwnd: HWND) -> Result<Option<PathBuf>> {
+pub fn open_file_dialog(hwnd: HWND, initial_dir: Option<&Path>) -> Result<Option<PathBuf>> {
     unsafe {
         let dialog: IFileOpenDialog = windows::Win32::System::Com::CoCreateInstance(
             &windows::Win32::UI::Shell::FileOpenDialog,
@@ -106,6 +106,13 @@ pub fn open_file_dialog(hwnd: HWND) -> Result<Option<PathBuf>> {
 
         let options = dialog.GetOptions()?;
         dialog.SetOptions(options | FOS_FORCEFILESYSTEM | FOS_FILEMUSTEXIST | FOS_PATHMUSTEXIST)?;
+
+        // 初期ディレクトリ設定
+        if let Some(dir) = initial_dir
+            && let Some(item) = create_shell_item(dir)
+        {
+            let _ = dialog.SetFolder(&item);
+        }
 
         // 画像ファイルフィルタ
         let filter_name: Vec<u16> = "画像ファイル\0".encode_utf16().collect();
@@ -142,12 +149,16 @@ pub fn open_file_dialog(hwnd: HWND) -> Result<Option<PathBuf>> {
 }
 
 /// フォルダ選択ダイアログ（IFileOpenDialog + FOS_PICKFOLDERS）
-pub fn open_folder_dialog(hwnd: HWND) -> Result<Option<PathBuf>> {
-    select_folder_dialog(hwnd, "フォルダを開く")
+pub fn open_folder_dialog(hwnd: HWND, initial_dir: Option<&Path>) -> Result<Option<PathBuf>> {
+    select_folder_dialog(hwnd, "フォルダを開く", initial_dir)
 }
 
 /// フォルダ選択ダイアログ（移動/コピー先選択用）
-pub fn select_folder_dialog(hwnd: HWND, title: &str) -> Result<Option<PathBuf>> {
+pub fn select_folder_dialog(
+    hwnd: HWND,
+    title: &str,
+    initial_dir: Option<&Path>,
+) -> Result<Option<PathBuf>> {
     unsafe {
         let dialog: IFileOpenDialog = windows::Win32::System::Com::CoCreateInstance(
             &windows::Win32::UI::Shell::FileOpenDialog,
@@ -161,6 +172,13 @@ pub fn select_folder_dialog(hwnd: HWND, title: &str) -> Result<Option<PathBuf>> 
 
         let title_wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
         dialog.SetTitle(windows::core::PCWSTR(title_wide.as_ptr()))?;
+
+        // 初期ディレクトリ設定
+        if let Some(dir) = initial_dir
+            && let Some(item) = create_shell_item(dir)
+        {
+            let _ = dialog.SetFolder(&item);
+        }
 
         match dialog.Show(Some(hwnd)) {
             Ok(()) => {}
@@ -289,6 +307,31 @@ pub fn open_bookmark_dialog(hwnd: HWND) -> Result<Option<PathBuf>> {
         windows::Win32::System::Com::CoTaskMemFree(Some(path_raw.0 as *const _));
         Ok(Some(path))
     }
+}
+
+/// 単一ファイルの移動（リネーム対応）
+/// SHFileOperationW (FO_MOVE) で pTo にファイルパスを指定し、移動+リネームに対応する
+pub fn move_single_file(hwnd: HWND, src: &Path, dest: &Path) -> Result<bool> {
+    let from = build_single_path_string(src);
+    let to = build_single_path_string(dest);
+
+    let mut op = SHFILEOPSTRUCTW {
+        hwnd,
+        wFunc: FO_MOVE,
+        pFrom: windows::core::PCWSTR(from.as_ptr()),
+        pTo: windows::core::PCWSTR(to.as_ptr()),
+        fFlags: FOF_ALLOWUNDO.0 as u16,
+        ..Default::default()
+    };
+
+    let result = unsafe { SHFileOperationW(&mut op) };
+    if result != 0 {
+        if op.fAnyOperationsAborted.as_bool() {
+            return Ok(false);
+        }
+        anyhow::bail!("ファイル移動に失敗しました (code: {result})");
+    }
+    Ok(!op.fAnyOperationsAborted.as_bool())
 }
 
 /// SHCreateItemFromParsingNameでIShellItemを取得するヘルパー

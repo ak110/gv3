@@ -218,9 +218,9 @@ impl KeyConfig {
     fn default_bindings() -> HashMap<InputChord, Action> {
         let mut m = HashMap::new();
 
-        // ナビゲーション
-        bind(&mut m, "←", Action::NavigateBack);
-        bind(&mut m, "→", Action::NavigateForward);
+        // [navigation] — gv3.keys.default.toml と同順
+        bind(&mut m, "←, WheelUp, ↑", Action::NavigateBack);
+        bind(&mut m, "→, WheelDown, ↓", Action::NavigateForward);
         bind(&mut m, "Shift+←", Action::Navigate1Back);
         bind(&mut m, "Shift+→", Action::Navigate1Forward);
         bind(&mut m, "PageUp", Action::Navigate5Back);
@@ -237,11 +237,7 @@ impl KeyConfig {
         bind(&mut m, "Shift+Tab", Action::SortNavigateBack);
         bind(&mut m, "Tab", Action::SortNavigateForward);
 
-        // ホイールナビゲーション
-        bind(&mut m, "WheelUp", Action::NavigateBack);
-        bind(&mut m, "WheelDown", Action::NavigateForward);
-
-        // 表示モード
+        // [display]
         bind(&mut m, "Num /", Action::DisplayAutoShrink);
         bind(&mut m, "Num *", Action::DisplayAutoFit);
         bind(&mut m, "Ctrl+Num -, Ctrl+WheelUp", Action::ZoomOut);
@@ -250,7 +246,7 @@ impl KeyConfig {
         bind(&mut m, "Num0", Action::ToggleMargin);
         bind(&mut m, "A", Action::CycleAlphaBackground);
 
-        // ウィンドウ
+        // [window]
         bind(&mut m, "Alt+Enter", Action::ToggleFullscreen);
         bind(&mut m, "Ctrl+X", Action::Minimize);
         bind(&mut m, "LeftDoubleClick", Action::ToggleMaximize);
@@ -258,7 +254,7 @@ impl KeyConfig {
         bind(&mut m, "Esc", Action::ToggleMenuBar);
         bind(&mut m, "T", Action::ToggleAlwaysOnTop);
 
-        // ファイル操作
+        // [file]
         bind(&mut m, "Ctrl+N", Action::NewWindow);
         bind(&mut m, "Ctrl+O", Action::OpenFile);
         bind(&mut m, "Ctrl+Shift+O", Action::OpenFolder);
@@ -278,7 +274,7 @@ impl KeyConfig {
         bind(&mut m, "Ctrl+P", Action::ExportPng);
         bind(&mut m, "MiddleClick", Action::ShowImageInfo);
 
-        // マーク
+        // [mark]
         bind(&mut m, "Delete", Action::MarkSet);
         bind(&mut m, "Ctrl+Delete", Action::MarkUnset);
         bind(&mut m, "Ctrl+Shift+I", Action::MarkInvertAll);
@@ -287,14 +283,14 @@ impl KeyConfig {
         bind(&mut m, "Ctrl+Shift+M", Action::MarkedMove);
         bind(&mut m, "Ctrl+Shift+C", Action::MarkedCopy);
 
-        // ブックマーク
+        // [bookmark]
         bind(&mut m, "F9", Action::BookmarkSave);
         bind(&mut m, "F12", Action::BookmarkLoad);
 
-        // ファイルリスト
+        // [list]
         bind(&mut m, "F4", Action::ToggleFileList);
 
-        // ダイアログ
+        // [dialog]
         bind(&mut m, "C", Action::DialogDisplay);
         bind(&mut m, "G", Action::DialogImage);
         bind(&mut m, "D", Action::DialogDraw);
@@ -304,7 +300,7 @@ impl KeyConfig {
         bind(&mut m, "E", Action::DialogEnvironment);
         bind(&mut m, "K", Action::DialogKeys);
 
-        // ユーティリティ
+        // [utility]
         bind(&mut m, "Shift+M", Action::OpenExeFolder);
         bind(&mut m, "Shift+B", Action::OpenBookmarkFolder);
         bind(&mut m, "Shift+S", Action::OpenSpiFolder);

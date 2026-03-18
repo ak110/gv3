@@ -786,7 +786,14 @@ impl AppWindow {
 
             // --- ファイル操作 ---
             Action::OpenFile => {
-                if let Ok(Some(path)) = crate::file_ops::open_file_dialog(self.hwnd) {
+                let initial_dir = self
+                    .document
+                    .current_source()
+                    .and_then(|s| s.parent_dir())
+                    .map(|p| p.to_path_buf());
+                if let Ok(Some(path)) =
+                    crate::file_ops::open_file_dialog(self.hwnd, initial_dir.as_deref())
+                {
                     if let Err(e) = self.document.open(&path) {
                         self.show_error_title(&format!("ファイルを開けませんでした: {e}"));
                     }
@@ -794,7 +801,14 @@ impl AppWindow {
                 }
             }
             Action::OpenFolder => {
-                if let Ok(Some(path)) = crate::file_ops::open_folder_dialog(self.hwnd) {
+                let initial_dir = self
+                    .document
+                    .current_source()
+                    .and_then(|s| s.parent_dir())
+                    .map(|p| p.to_path_buf());
+                if let Ok(Some(path)) =
+                    crate::file_ops::open_folder_dialog(self.hwnd, initial_dir.as_deref())
+                {
                     if let Err(e) = self.document.open_folder(&path) {
                         self.show_error_title(&format!("フォルダを開けませんでした: {e}"));
                     }
@@ -816,29 +830,77 @@ impl AppWindow {
                 }
             }
             Action::MoveFile => {
-                if let Some(source) = self.document.current_source()
-                    && source.is_contained()
-                {
+                let Some(current) = self.document.file_list().current() else {
+                    return;
+                };
+                let source = current.source.clone();
+                let path = current.path.clone();
+
+                // PDFページは移動不可（ページ単位の書き出しにはデコード済み画像の再エンコードが必要）
+                if matches!(source, crate::file_info::FileSource::PdfPage { .. }) {
                     return;
                 }
-                if let Some(path) = self.document.current_path().map(|p| p.to_path_buf())
-                    && let Ok(Some(dest)) =
-                        crate::file_ops::select_folder_dialog(self.hwnd, "移動先フォルダ")
-                    && let Ok(true) = crate::file_ops::move_files(self.hwnd, &[&path], &dest)
-                {
-                    self.document.remove_current_from_list();
-                    self.process_document_events();
+
+                let initial_dir = source.parent_dir().map(|p| p.to_path_buf());
+                let default_name = source.default_save_name();
+
+                if let Ok(Some(dest)) = crate::file_ops::save_file_dialog(
+                    self.hwnd,
+                    &default_name,
+                    "すべてのファイル",
+                    "*.*",
+                    initial_dir.as_deref(),
+                ) {
+                    match &source {
+                        crate::file_info::FileSource::File(_) => {
+                            // 通常ファイル: SHFileOperationWでUndo対応の移動
+                            if let Ok(true) =
+                                crate::file_ops::move_single_file(self.hwnd, &path, &dest)
+                            {
+                                // 同一フォルダ内（リネーム）ならリスト内エントリを更新
+                                if path.parent() == dest.parent() {
+                                    if let Err(e) = self.document.rename_current_in_list(&dest) {
+                                        eprintln!("リスト更新失敗: {e}");
+                                    }
+                                } else {
+                                    self.document.remove_current_from_list();
+                                }
+                                self.process_document_events();
+                            }
+                        }
+                        crate::file_info::FileSource::ArchiveEntry { on_demand, .. } => {
+                            // アーカイブエントリ: 書き出し（リスト除去なし）
+                            if *on_demand {
+                                match self.document.read_file_data_current() {
+                                    Ok(data) => {
+                                        if let Err(e) = std::fs::write(&dest, &data) {
+                                            eprintln!("ファイル書き出し失敗: {e}");
+                                        }
+                                    }
+                                    Err(e) => eprintln!("ファイル書き出し失敗: {e}"),
+                                }
+                            } else {
+                                if let Err(e) = std::fs::copy(&path, &dest) {
+                                    eprintln!("ファイル書き出し失敗: {e}");
+                                }
+                            }
+                        }
+                        crate::file_info::FileSource::PdfPage { .. } => {
+                            unreachable!(); // 上でガード済み
+                        }
+                    }
                 }
             }
             Action::CopyFile => {
                 if let Some(current) = self.document.file_list().current() {
-                    let default_name = &current.file_name;
+                    let default_name = current.source.default_save_name();
+                    let initial_dir = current.source.parent_dir().map(|p| p.to_path_buf());
                     if let Ok(Some(dest)) = crate::file_ops::save_file_dialog(
                         self.hwnd,
-                        default_name,
+                        &default_name,
                         "すべてのファイル",
                         "*.*",
-                        None,
+                        initial_dir.as_deref(),
                     ) {
                         if matches!(
                             current.source,
@@ -891,19 +953,24 @@ impl AppWindow {
                 {
                     return;
                 }
-                let paths: Vec<std::path::PathBuf> = self
-                    .document
-                    .file_list()
-                    .marked_indices()
+                let marked = self.document.file_list().marked_indices();
+                let paths: Vec<std::path::PathBuf> = marked
                     .iter()
                     .map(|&i| self.document.file_list().files()[i].path.clone())
                     .collect();
                 if paths.is_empty() {
                     return;
                 }
-                if let Ok(Some(dest)) =
-                    crate::file_ops::select_folder_dialog(self.hwnd, "移動先フォルダ")
-                {
+                // マーク済み最初のファイルの親ディレクトリを初期ディレクトリとして使用
+                let initial_dir = self.document.file_list().files()[marked[0]]
+                    .source
+                    .parent_dir()
+                    .map(|p| p.to_path_buf());
+                if let Ok(Some(dest)) = crate::file_ops::select_folder_dialog(
+                    self.hwnd,
+                    "移動先フォルダ",
+                    initial_dir.as_deref(),
+                ) {
                     let path_refs: Vec<&Path> = paths.iter().map(|p| p.as_path()).collect();
                     if let Ok(true) = crate::file_ops::move_files(self.hwnd, &path_refs, &dest) {
                         self.document.remove_marked_from_list();
@@ -912,19 +979,23 @@ impl AppWindow {
                 }
             }
             Action::MarkedCopy => {
-                let paths: Vec<std::path::PathBuf> = self
-                    .document
-                    .file_list()
-                    .marked_indices()
+                let marked = self.document.file_list().marked_indices();
+                let paths: Vec<std::path::PathBuf> = marked
                     .iter()
                     .map(|&i| self.document.file_list().files()[i].path.clone())
                     .collect();
                 if paths.is_empty() {
                     return;
                 }
-                if let Ok(Some(dest)) =
-                    crate::file_ops::select_folder_dialog(self.hwnd, "コピー先フォルダ")
-                {
+                let initial_dir = self.document.file_list().files()[marked[0]]
+                    .source
+                    .parent_dir()
+                    .map(|p| p.to_path_buf());
+                if let Ok(Some(dest)) = crate::file_ops::select_folder_dialog(
+                    self.hwnd,
+                    "コピー先フォルダ",
+                    initial_dir.as_deref(),
+                ) {
                     let path_refs: Vec<&Path> = paths.iter().map(|p| p.as_path()).collect();
                     if let Err(e) = crate::file_ops::copy_files(self.hwnd, &path_refs, &dest) {
                         eprintln!("ファイルコピー失敗: {e}");
@@ -1205,20 +1276,24 @@ impl AppWindow {
         let Some(img) = self.document.current_image() else {
             return;
         };
-        let default_name = self
+        let (default_stem, initial_dir) = self
             .document
-            .current_path()
-            .and_then(|p| p.file_stem())
-            .and_then(|s| s.to_str())
-            .map(|s| format!("{s}.{ext}"))
-            .unwrap_or_else(|| format!("image.{ext}"));
+            .current_source()
+            .map(|s| {
+                (
+                    s.default_save_stem(),
+                    s.parent_dir().map(|p| p.to_path_buf()),
+                )
+            })
+            .unwrap_or_else(|| ("image".to_string(), None));
+        let default_name = format!("{default_stem}.{ext}");
 
         let Some(save_path) = crate::file_ops::save_file_dialog(
             self.hwnd,
             &default_name,
             filter_name,
             filter_spec,
-            None,
+            initial_dir.as_deref(),
         )
         .ok()
         .flatten() else {
