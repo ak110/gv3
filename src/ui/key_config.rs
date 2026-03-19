@@ -119,6 +119,13 @@ pub enum Action {
     // --- 編集 ---
     DeselectSelection,
     Crop,
+    FlipHorizontal,
+    FlipVertical,
+    Rotate180,
+    Rotate90CW,
+    Rotate90CCW,
+    RotateArbitrary,
+    Resize,
 
     // --- ブックマーク ---
     BookmarkSave,
@@ -278,6 +285,11 @@ impl KeyConfig {
         // [edit]
         bind(&mut m, "Enter", Action::DeselectSelection);
         bind(&mut m, "Ctrl+Shift+X", Action::Crop);
+        bind(&mut m, "Ctrl+↑", Action::Rotate180);
+        bind(&mut m, "Ctrl+→", Action::Rotate90CW);
+        bind(&mut m, "Ctrl+←", Action::Rotate90CCW);
+        bind(&mut m, "Ctrl+↓", Action::RotateArbitrary);
+        bind(&mut m, "Ctrl+Shift+R", Action::Resize);
 
         // [bookmark]
         bind(&mut m, "F9", Action::BookmarkSave);
@@ -519,6 +531,13 @@ fn field_to_action(field: &str) -> Option<Action> {
         // 編集
         "deselect_selection" => Action::DeselectSelection,
         "crop" => Action::Crop,
+        "flip_horizontal" => Action::FlipHorizontal,
+        "flip_vertical" => Action::FlipVertical,
+        "rotate_180" => Action::Rotate180,
+        "rotate_90_cw" => Action::Rotate90CW,
+        "rotate_90_ccw" => Action::Rotate90CCW,
+        "rotate_arbitrary" => Action::RotateArbitrary,
+        "resize" => Action::Resize,
 
         // ブックマーク
         "bookmark_save" => Action::BookmarkSave,

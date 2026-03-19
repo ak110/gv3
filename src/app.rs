@@ -1298,6 +1298,70 @@ impl AppWindow {
                     self.update_title();
                 }
             }
+            Action::FlipHorizontal => {
+                if let Some(img) = self.document.current_image() {
+                    let result = crate::filter::transform::flip_horizontal(img);
+                    self.selection.deselect();
+                    self.document.apply_edit(result);
+                    self.process_document_events();
+                }
+            }
+            Action::FlipVertical => {
+                if let Some(img) = self.document.current_image() {
+                    let result = crate::filter::transform::flip_vertical(img);
+                    self.selection.deselect();
+                    self.document.apply_edit(result);
+                    self.process_document_events();
+                }
+            }
+            Action::Rotate180 => {
+                if let Some(img) = self.document.current_image() {
+                    let result = crate::filter::transform::rotate_180(img);
+                    self.selection.deselect();
+                    self.document.apply_edit(result);
+                    self.process_document_events();
+                }
+            }
+            Action::Rotate90CW => {
+                if let Some(img) = self.document.current_image() {
+                    let result = crate::filter::transform::rotate_90(img);
+                    self.selection.deselect();
+                    self.document.apply_edit(result);
+                    self.process_document_events();
+                }
+            }
+            Action::Rotate90CCW => {
+                if let Some(img) = self.document.current_image() {
+                    let result = crate::filter::transform::rotate_270(img);
+                    self.selection.deselect();
+                    self.document.apply_edit(result);
+                    self.process_document_events();
+                }
+            }
+            Action::RotateArbitrary => {
+                if self.document.current_image().is_some()
+                    && let Some(degrees) = crate::ui::rotate_dialog::show_rotate_dialog(self.hwnd)
+                    && let Some(img) = self.document.current_image()
+                {
+                    let result = crate::filter::transform::rotate_arbitrary(img, degrees);
+                    self.selection.deselect();
+                    self.document.apply_edit(result);
+                    self.process_document_events();
+                }
+            }
+            Action::Resize => {
+                if let Some(img) = self.document.current_image()
+                    && let Some((nw, nh)) = crate::ui::resize_dialog::show_resize_dialog(
+                        self.hwnd, img.width, img.height,
+                    )
+                    && let Some(img) = self.document.current_image()
+                {
+                    let result = crate::filter::transform::resize(img, nw, nh);
+                    self.selection.deselect();
+                    self.document.apply_edit(result);
+                    self.process_document_events();
+                }
+            }
 
             // --- ブックマーク ---
             Action::BookmarkSave => {

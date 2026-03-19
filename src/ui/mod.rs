@@ -6,4 +6,6 @@ pub mod info_dialog;
 pub mod key_config;
 pub mod menu;
 pub mod page_dialog;
+pub mod resize_dialog;
+pub mod rotate_dialog;
 pub mod window;

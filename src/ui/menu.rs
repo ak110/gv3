@@ -56,6 +56,20 @@ pub fn build_menu_bar() -> HMENU {
         ]);
         append_popup(menu_bar, mark_menu, "マーク(&M)");
 
+        // 編集(&E)
+        let edit_menu = create_popup(&[
+            Some((Action::FlipHorizontal, "左右反転")),
+            Some((Action::FlipVertical, "上下反転")),
+            None,
+            Some((Action::Rotate180, "180度回転\tCtrl+↑")),
+            Some((Action::Rotate90CW, "時計回りに90度回転\tCtrl+→")),
+            Some((Action::Rotate90CCW, "反時計回りに90度回転\tCtrl+←")),
+            Some((Action::RotateArbitrary, "角度指定回転\tCtrl+↓")),
+            None,
+            Some((Action::Resize, "解像度の変更\tCtrl+Shift+R")),
+        ]);
+        append_popup(menu_bar, edit_menu, "編集(&E)");
+
         // 画像(&I)
         let image_menu = create_popup(&[
             Some((Action::DeselectSelection, "選択範囲を取り消し\tEnter")),
@@ -261,6 +275,13 @@ const ALL_ACTIONS: &[Action] = &[
     // 編集
     Action::DeselectSelection,
     Action::Crop,
+    Action::FlipHorizontal,
+    Action::FlipVertical,
+    Action::Rotate180,
+    Action::Rotate90CW,
+    Action::Rotate90CCW,
+    Action::RotateArbitrary,
+    Action::Resize,
     // ブックマーク
     Action::BookmarkSave,
     Action::BookmarkLoad,
