@@ -45,6 +45,7 @@ cycle_alpha_background = "A"
 toggle_fullscreen = "Alt+Enter"
 minimize = "Ctrl+X"
 toggle_maximize = "LeftDoubleClick"
+toggle_always_on_top = "T"
 toggle_cursor_hide = "Num -"
 toggle_menu_bar = "Esc"
 
@@ -84,6 +85,26 @@ bookmark_load = "F12"
 toggle_file_list = "F4"
 # shuffle_all = ""
 # shuffle_groups = ""
+
+[edit]
+deselect_selection = "Enter"
+crop = "Ctrl+Shift+X"
+rotate_180 = "Ctrl+↑"
+rotate_90_cw = "Ctrl+→"
+rotate_90_ccw = "Ctrl+←"
+rotate_arbitrary = "Ctrl+↓"
+resize = "Ctrl+Shift+R"
+
+[filter]
+fill = "Ctrl+Shift+F"
+levels = "Ctrl+L"
+invert_colors = "Ctrl+I"
+grayscale_strict = "Ctrl+G"
+mosaic = "Ctrl+M"
+
+[persistent_filter]
+levels = "Ctrl+Shift+L"
+grayscale_simple = "Ctrl+Shift+G"
 
 [utility]
 open_exe_folder = "Shift+M"

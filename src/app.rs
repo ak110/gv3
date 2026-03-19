@@ -15,10 +15,11 @@ use crate::archive::ArchiveManager;
 use crate::config::Config;
 use crate::document::{Document, DocumentEvent};
 use crate::extension_registry::ExtensionRegistry;
-use crate::image::{DecoderChain, StandardDecoder};
+use crate::image::{DecodedImage, DecoderChain, StandardDecoder};
+use crate::persistent_filter::FilterOperation;
 use crate::render::D2DRenderer;
 use crate::render::layout::DisplayMode;
-use crate::selection::{HandleKind, HitTestResult, Selection};
+use crate::selection::{HandleKind, HitTestResult, PixelRect, Selection};
 use crate::susie::SusieManager;
 use crate::ui::cursor_hider::{CursorHider, TIMER_ID_CURSOR_HIDE};
 use crate::ui::file_list_panel::FileListPanel;
@@ -658,90 +659,57 @@ impl AppWindow {
         }
     }
 
+    /// 未保存確認 → 選択解除 → ナビゲーション操作 → イベント処理の共通パターン
+    fn navigate_with_guard(&mut self, f: impl FnOnce(&mut Document)) {
+        if !self.guard_unsaved_edit() {
+            return;
+        }
+        self.selection.deselect();
+        f(&mut self.document);
+        self.process_document_events();
+    }
+
+    /// パラメータなしフィルタの共通パターン（選択範囲対応）
+    fn apply_simple_filter(&mut self, f: fn(&DecodedImage, Option<&PixelRect>) -> DecodedImage) {
+        if let Some(img) = self.document.current_image() {
+            let sel = self.selection.current_rect();
+            let result = f(img, sel.as_ref());
+            self.document.apply_edit(result);
+            self.process_document_events();
+        }
+    }
+
+    /// 画像全体に適用する変形操作の共通パターン（選択解除付き）
+    fn apply_transform(&mut self, f: fn(&DecodedImage) -> DecodedImage) {
+        if let Some(img) = self.document.current_image() {
+            let result = f(img);
+            self.selection.deselect();
+            self.document.apply_edit(result);
+            self.process_document_events();
+        }
+    }
+
+    /// パラメータなし永続フィルタの共通パターン
+    fn add_persistent_filter(&mut self, op: crate::persistent_filter::FilterOperation) {
+        self.document.persistent_filter_mut().add_operation(op);
+        self.document.on_persistent_filter_changed();
+        self.process_document_events();
+    }
+
     /// アクションを実行する
     fn execute_action(&mut self, action: Action) {
         match action {
             // --- ナビゲーション ---
-            Action::NavigateBack => {
-                if !self.guard_unsaved_edit() {
-                    return;
-                }
-                self.selection.deselect();
-                self.document.navigate_relative(-1);
-                self.process_document_events();
-            }
-            Action::NavigateForward => {
-                if !self.guard_unsaved_edit() {
-                    return;
-                }
-                self.selection.deselect();
-                self.document.navigate_relative(1);
-                self.process_document_events();
-            }
-            Action::Navigate1Back => {
-                if !self.guard_unsaved_edit() {
-                    return;
-                }
-                self.selection.deselect();
-                self.document.navigate_relative(-1);
-                self.process_document_events();
-            }
-            Action::Navigate1Forward => {
-                if !self.guard_unsaved_edit() {
-                    return;
-                }
-                self.selection.deselect();
-                self.document.navigate_relative(1);
-                self.process_document_events();
-            }
-            Action::Navigate5Back => {
-                if !self.guard_unsaved_edit() {
-                    return;
-                }
-                self.selection.deselect();
-                self.document.navigate_relative(-5);
-                self.process_document_events();
-            }
-            Action::Navigate5Forward => {
-                if !self.guard_unsaved_edit() {
-                    return;
-                }
-                self.selection.deselect();
-                self.document.navigate_relative(5);
-                self.process_document_events();
-            }
-            Action::Navigate50Back => {
-                if !self.guard_unsaved_edit() {
-                    return;
-                }
-                self.selection.deselect();
-                self.document.navigate_relative(-50);
-                self.process_document_events();
-            }
-            Action::Navigate50Forward => {
-                if !self.guard_unsaved_edit() {
-                    return;
-                }
-                self.selection.deselect();
-                self.document.navigate_relative(50);
-                self.process_document_events();
-            }
-            Action::NavigateFirst => {
-                if !self.guard_unsaved_edit() {
-                    return;
-                }
-                self.selection.deselect();
-                self.document.navigate_first();
-                self.process_document_events();
-            }
-            Action::NavigateLast => {
-                if !self.guard_unsaved_edit() {
-                    return;
-                }
-                self.selection.deselect();
-                self.document.navigate_last();
-                self.process_document_events();
-            }
+            Action::NavigateBack => self.navigate_with_guard(|d| d.navigate_relative(-1)),
+            Action::NavigateForward => self.navigate_with_guard(|d| d.navigate_relative(1)),
+            Action::Navigate1Back => self.navigate_with_guard(|d| d.navigate_relative(-1)),
+            Action::Navigate1Forward => self.navigate_with_guard(|d| d.navigate_relative(1)),
+            Action::Navigate5Back => self.navigate_with_guard(|d| d.navigate_relative(-5)),
+            Action::Navigate5Forward => self.navigate_with_guard(|d| d.navigate_relative(5)),
+            Action::Navigate50Back => self.navigate_with_guard(|d| d.navigate_relative(-50)),
+            Action::Navigate50Forward => self.navigate_with_guard(|d| d.navigate_relative(50)),
+            Action::NavigateFirst => self.navigate_with_guard(|d| d.navigate_first()),
+            Action::NavigateLast => self.navigate_with_guard(|d| d.navigate_last()),
 
             // --- 表示モード ---
             Action::DisplayAutoShrink => {
@@ -849,22 +817,8 @@ impl AppWindow {
                     }
                 }
             }
-            Action::NavigatePrevMark => {
-                if !self.guard_unsaved_edit() {
-                    return;
-                }
-                self.selection.deselect();
-                self.document.navigate_prev_mark();
-                self.process_document_events();
-            }
-            Action::NavigateNextMark => {
-                if !self.guard_unsaved_edit() {
-                    return;
-                }
-                self.selection.deselect();
-                self.document.navigate_next_mark();
-                self.process_document_events();
-            }
+            Action::NavigatePrevMark => self.navigate_with_guard(|d| d.navigate_prev_mark()),
+            Action::NavigateNextMark => self.navigate_with_guard(|d| d.navigate_next_mark()),
             Action::RemoveFromList => {
                 self.document.remove_current_from_list();
                 self.process_document_events();
@@ -875,22 +829,8 @@ impl AppWindow {
             }
 
             // --- フォルダナビゲーション ---
-            Action::NavigatePrevFolder => {
-                if !self.guard_unsaved_edit() {
-                    return;
-                }
-                self.selection.deselect();
-                self.document.navigate_prev_folder();
-                self.process_document_events();
-            }
-            Action::NavigateNextFolder => {
-                if !self.guard_unsaved_edit() {
-                    return;
-                }
-                self.selection.deselect();
-                self.document.navigate_next_folder();
-                self.process_document_events();
-            }
+            Action::NavigatePrevFolder => self.navigate_with_guard(|d| d.navigate_prev_folder()),
+            Action::NavigateNextFolder => self.navigate_with_guard(|d| d.navigate_next_folder()),
 
             // --- ファイル操作 ---
             Action::OpenFile => {
@@ -1128,14 +1068,7 @@ impl AppWindow {
                     }
                 }
             }
-            Action::Reload => {
-                if !self.guard_unsaved_edit() {
-                    return;
-                }
-                self.selection.deselect();
-                self.document.reload();
-                self.process_document_events();
-            }
+            Action::Reload => self.navigate_with_guard(|d| d.reload()),
 
             // --- クリップボード ---
             Action::CopyImage => {
@@ -1299,44 +1232,19 @@ impl AppWindow {
                 }
             }
             Action::FlipHorizontal => {
-                if let Some(img) = self.document.current_image() {
-                    let result = crate::filter::transform::flip_horizontal(img);
-                    self.selection.deselect();
-                    self.document.apply_edit(result);
-                    self.process_document_events();
-                }
+                self.apply_transform(crate::filter::transform::flip_horizontal);
             }
             Action::FlipVertical => {
-                if let Some(img) = self.document.current_image() {
-                    let result = crate::filter::transform::flip_vertical(img);
-                    self.selection.deselect();
-                    self.document.apply_edit(result);
-                    self.process_document_events();
-                }
+                self.apply_transform(crate::filter::transform::flip_vertical);
             }
             Action::Rotate180 => {
-                if let Some(img) = self.document.current_image() {
-                    let result = crate::filter::transform::rotate_180(img);
-                    self.selection.deselect();
-                    self.document.apply_edit(result);
-                    self.process_document_events();
-                }
+                self.apply_transform(crate::filter::transform::rotate_180);
             }
             Action::Rotate90CW => {
-                if let Some(img) = self.document.current_image() {
-                    let result = crate::filter::transform::rotate_90(img);
-                    self.selection.deselect();
-                    self.document.apply_edit(result);
-                    self.process_document_events();
-                }
+                self.apply_transform(crate::filter::transform::rotate_90);
             }
             Action::Rotate90CCW => {
-                if let Some(img) = self.document.current_image() {
-                    let result = crate::filter::transform::rotate_270(img);
-                    self.selection.deselect();
-                    self.document.apply_edit(result);
-                    self.process_document_events();
-                }
+                self.apply_transform(crate::filter::transform::rotate_270);
             }
             Action::RotateArbitrary => {
                 if self.document.current_image().is_some()
@@ -1536,78 +1444,21 @@ impl AppWindow {
             }
 
             // --- フィルタ（パラメータなし） ---
-            Action::InvertColors => {
-                if let Some(img) = self.document.current_image() {
-                    let sel = self.selection.current_rect();
-                    let result = crate::filter::color::invert_colors(img, sel.as_ref());
-                    self.document.apply_edit(result);
-                    self.process_document_events();
-                }
-            }
+            Action::InvertColors => self.apply_simple_filter(crate::filter::color::invert_colors),
             Action::GrayscaleSimple => {
-                if let Some(img) = self.document.current_image() {
-                    let sel = self.selection.current_rect();
-                    let result = crate::filter::color::grayscale_simple(img, sel.as_ref());
-                    self.document.apply_edit(result);
-                    self.process_document_events();
-                }
+                self.apply_simple_filter(crate::filter::color::grayscale_simple);
             }
             Action::GrayscaleStrict => {
-                if let Some(img) = self.document.current_image() {
-                    let sel = self.selection.current_rect();
-                    let result = crate::filter::color::grayscale_strict(img, sel.as_ref());
-                    self.document.apply_edit(result);
-                    self.process_document_events();
-                }
+                self.apply_simple_filter(crate::filter::color::grayscale_strict);
             }
-            Action::ApplyAlpha => {
-                if let Some(img) = self.document.current_image() {
-                    let sel = self.selection.current_rect();
-                    let result = crate::filter::color::apply_alpha(img, sel.as_ref());
-                    self.document.apply_edit(result);
-                    self.process_document_events();
-                }
-            }
-            Action::Blur => {
-                if let Some(img) = self.document.current_image() {
-                    let sel = self.selection.current_rect();
-                    let result = crate::filter::blur::blur(img, sel.as_ref());
-                    self.document.apply_edit(result);
-                    self.process_document_events();
-                }
-            }
-            Action::BlurStrong => {
-                if let Some(img) = self.document.current_image() {
-                    let sel = self.selection.current_rect();
-                    let result = crate::filter::blur::blur_strong(img, sel.as_ref());
-                    self.document.apply_edit(result);
-                    self.process_document_events();
-                }
-            }
-            Action::Sharpen => {
-                if let Some(img) = self.document.current_image() {
-                    let sel = self.selection.current_rect();
-                    let result = crate::filter::sharpen::sharpen(img, sel.as_ref());
-                    self.document.apply_edit(result);
-                    self.process_document_events();
-                }
-            }
+            Action::ApplyAlpha => self.apply_simple_filter(crate::filter::color::apply_alpha),
+            Action::Blur => self.apply_simple_filter(crate::filter::blur::blur),
+            Action::BlurStrong => self.apply_simple_filter(crate::filter::blur::blur_strong),
+            Action::Sharpen => self.apply_simple_filter(crate::filter::sharpen::sharpen),
             Action::SharpenStrong => {
-                if let Some(img) = self.document.current_image() {
-                    let sel = self.selection.current_rect();
-                    let result = crate::filter::sharpen::sharpen_strong(img, sel.as_ref());
-                    self.document.apply_edit(result);
-                    self.process_document_events();
-                }
+                self.apply_simple_filter(crate::filter::sharpen::sharpen_strong);
             }
-            Action::MedianFilter => {
-                if let Some(img) = self.document.current_image() {
-                    let sel = self.selection.current_rect();
-                    let result = crate::filter::blur::median_filter(img, sel.as_ref());
-                    self.document.apply_edit(result);
-                    self.process_document_events();
-                }
-            }
+            Action::MedianFilter => self.apply_simple_filter(crate::filter::blur::median_filter),
 
             // --- 永続フィルタ ---
             Action::PFilterToggle => {
@@ -1616,39 +1467,19 @@ impl AppWindow {
                 self.process_document_events();
             }
             Action::PFilterFlipH => {
-                self.document
-                    .persistent_filter_mut()
-                    .add_operation(crate::persistent_filter::FilterOperation::FlipHorizontal);
-                self.document.on_persistent_filter_changed();
-                self.process_document_events();
+                self.add_persistent_filter(FilterOperation::FlipHorizontal);
             }
             Action::PFilterFlipV => {
-                self.document
-                    .persistent_filter_mut()
-                    .add_operation(crate::persistent_filter::FilterOperation::FlipVertical);
-                self.document.on_persistent_filter_changed();
-                self.process_document_events();
+                self.add_persistent_filter(FilterOperation::FlipVertical);
             }
             Action::PFilterRotate180 => {
-                self.document
-                    .persistent_filter_mut()
-                    .add_operation(crate::persistent_filter::FilterOperation::Rotate180);
-                self.document.on_persistent_filter_changed();
-                self.process_document_events();
+                self.add_persistent_filter(FilterOperation::Rotate180);
             }
             Action::PFilterRotate90CW => {
-                self.document
-                    .persistent_filter_mut()
-                    .add_operation(crate::persistent_filter::FilterOperation::Rotate90CW);
-                self.document.on_persistent_filter_changed();
-                self.process_document_events();
+                self.add_persistent_filter(FilterOperation::Rotate90CW);
             }
             Action::PFilterRotate90CCW => {
-                self.document
-                    .persistent_filter_mut()
-                    .add_operation(crate::persistent_filter::FilterOperation::Rotate90CCW);
-                self.document.on_persistent_filter_changed();
-                self.process_document_events();
+                self.add_persistent_filter(FilterOperation::Rotate90CCW);
             }
             Action::PFilterLevels => {
                 use crate::ui::filter_dialog::{FieldDef, show_filter_dialog};
@@ -1668,11 +1499,7 @@ impl AppWindow {
                 {
                     let low = vals[0].parse::<u8>().unwrap_or(0);
                     let high = vals[1].parse::<u8>().unwrap_or(255);
-                    self.document.persistent_filter_mut().add_operation(
-                        crate::persistent_filter::FilterOperation::Levels { low, high },
-                    );
-                    self.document.on_persistent_filter_changed();
-                    self.process_document_events();
+                    self.add_persistent_filter(FilterOperation::Levels { low, high });
                 }
             }
             Action::PFilterGamma => {
@@ -1685,11 +1512,7 @@ impl AppWindow {
                 if let Some(vals) = show_filter_dialog(self.hwnd, "永続ガンマ補正", &fields)
                 {
                     let value = vals[0].parse::<f64>().unwrap_or(1.0).clamp(0.1, 10.0);
-                    self.document
-                        .persistent_filter_mut()
-                        .add_operation(crate::persistent_filter::FilterOperation::Gamma { value });
-                    self.document.on_persistent_filter_changed();
-                    self.process_document_events();
+                    self.add_persistent_filter(FilterOperation::Gamma { value });
                 }
             }
             Action::PFilterBrightnessContrast => {
@@ -1711,57 +1534,23 @@ impl AppWindow {
                 {
                     let brightness = vals[0].parse::<i32>().unwrap_or(0).clamp(-128, 128);
                     let contrast = vals[1].parse::<i32>().unwrap_or(0).clamp(-128, 128);
-                    self.document.persistent_filter_mut().add_operation(
-                        crate::persistent_filter::FilterOperation::BrightnessContrast {
-                            brightness,
-                            contrast,
-                        },
-                    );
-                    self.document.on_persistent_filter_changed();
-                    self.process_document_events();
+                    self.add_persistent_filter(FilterOperation::BrightnessContrast {
+                        brightness,
+                        contrast,
+                    });
                 }
             }
             Action::PFilterGrayscaleSimple => {
-                self.document
-                    .persistent_filter_mut()
-                    .add_operation(crate::persistent_filter::FilterOperation::GrayscaleSimple);
-                self.document.on_persistent_filter_changed();
-                self.process_document_events();
+                self.add_persistent_filter(FilterOperation::GrayscaleSimple);
             }
             Action::PFilterGrayscaleStrict => {
-                self.document
-                    .persistent_filter_mut()
-                    .add_operation(crate::persistent_filter::FilterOperation::GrayscaleStrict);
-                self.document.on_persistent_filter_changed();
-                self.process_document_events();
+                self.add_persistent_filter(FilterOperation::GrayscaleStrict);
             }
-            Action::PFilterBlur => {
-                self.document
-                    .persistent_filter_mut()
-                    .add_operation(crate::persistent_filter::FilterOperation::Blur);
-                self.document.on_persistent_filter_changed();
-                self.process_document_events();
-            }
-            Action::PFilterBlurStrong => {
-                self.document
-                    .persistent_filter_mut()
-                    .add_operation(crate::persistent_filter::FilterOperation::BlurStrong);
-                self.document.on_persistent_filter_changed();
-                self.process_document_events();
-            }
-            Action::PFilterSharpen => {
-                self.document
-                    .persistent_filter_mut()
-                    .add_operation(crate::persistent_filter::FilterOperation::Sharpen);
-                self.document.on_persistent_filter_changed();
-                self.process_document_events();
-            }
+            Action::PFilterBlur => self.add_persistent_filter(FilterOperation::Blur),
+            Action::PFilterBlurStrong => self.add_persistent_filter(FilterOperation::BlurStrong),
+            Action::PFilterSharpen => self.add_persistent_filter(FilterOperation::Sharpen),
             Action::PFilterSharpenStrong => {
-                self.document
-                    .persistent_filter_mut()
-                    .add_operation(crate::persistent_filter::FilterOperation::SharpenStrong);
-                self.document.on_persistent_filter_changed();
-                self.process_document_events();
+                self.add_persistent_filter(FilterOperation::SharpenStrong);
             }
             Action::PFilterGaussianBlur => {
                 use crate::ui::filter_dialog::{FieldDef, show_filter_dialog};
@@ -1773,11 +1562,7 @@ impl AppWindow {
                 if let Some(vals) = show_filter_dialog(self.hwnd, "永続ガウスぼかし", &fields)
                 {
                     let radius = vals[0].parse::<f64>().unwrap_or(2.0).clamp(0.1, 10.0);
-                    self.document.persistent_filter_mut().add_operation(
-                        crate::persistent_filter::FilterOperation::GaussianBlur { radius },
-                    );
-                    self.document.on_persistent_filter_changed();
-                    self.process_document_events();
+                    self.add_persistent_filter(FilterOperation::GaussianBlur { radius });
                 }
             }
             Action::PFilterUnsharpMask => {
@@ -1790,33 +1575,17 @@ impl AppWindow {
                 if let Some(vals) = show_filter_dialog(self.hwnd, "永続アンシャープマスク", &fields)
                 {
                     let radius = vals[0].parse::<f64>().unwrap_or(2.0).clamp(0.1, 10.0);
-                    self.document.persistent_filter_mut().add_operation(
-                        crate::persistent_filter::FilterOperation::UnsharpMask { radius },
-                    );
-                    self.document.on_persistent_filter_changed();
-                    self.process_document_events();
+                    self.add_persistent_filter(FilterOperation::UnsharpMask { radius });
                 }
             }
             Action::PFilterMedianFilter => {
-                self.document
-                    .persistent_filter_mut()
-                    .add_operation(crate::persistent_filter::FilterOperation::MedianFilter);
-                self.document.on_persistent_filter_changed();
-                self.process_document_events();
+                self.add_persistent_filter(FilterOperation::MedianFilter);
             }
             Action::PFilterInvertColors => {
-                self.document
-                    .persistent_filter_mut()
-                    .add_operation(crate::persistent_filter::FilterOperation::InvertColors);
-                self.document.on_persistent_filter_changed();
-                self.process_document_events();
+                self.add_persistent_filter(FilterOperation::InvertColors);
             }
             Action::PFilterApplyAlpha => {
-                self.document
-                    .persistent_filter_mut()
-                    .add_operation(crate::persistent_filter::FilterOperation::ApplyAlpha);
-                self.document.on_persistent_filter_changed();
-                self.process_document_events();
+                self.add_persistent_filter(FilterOperation::ApplyAlpha);
             }
 
             // --- ブックマーク ---
@@ -1854,21 +1623,9 @@ impl AppWindow {
             }
 
             // --- ソートナビゲーション ---
-            Action::SortNavigateBack => {
-                if !self.guard_unsaved_edit() {
-                    return;
-                }
-                self.selection.deselect();
-                self.document.sort_navigate_back();
-                self.process_document_events();
-            }
+            Action::SortNavigateBack => self.navigate_with_guard(|d| d.sort_navigate_back()),
             Action::SortNavigateForward => {
-                if !self.guard_unsaved_edit() {
-                    return;
-                }
-                self.selection.deselect();
-                self.document.sort_navigate_forward();
-                self.process_document_events();
+                self.navigate_with_guard(|d| d.sort_navigate_forward());
             }
 
             // --- シャッフル ---

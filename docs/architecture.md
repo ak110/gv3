@@ -23,7 +23,19 @@ gv3/
 │   ├── pdf_renderer.rs         # Windows.Data.Pdf によるPDFページレンダリング
 │   ├── updater.rs              # GitHub Releases からの自動更新
 │   ├── temp_cleanup.rs         # 起動時の古い一時ファイル自動削除
+│   ├── editing.rs              # EditingSession: 編集セッション管理（元画像バックアップ）
+│   ├── selection.rs            # Selection: 矩形選択（状態マシン、座標変換）
+│   ├── persistent_filter.rs    # PersistentFilter: 永続フィルタ管理（FilterOperation列）
 │   ├── util.rs                 # ユーティリティ（to_wide等の共通関数）
+│   ├── test_helpers.rs         # テスト用ヘルパー（テスト時のみコンパイル）
+│   │
+│   ├── filter/                 # 画像フィルタ
+│   │   ├── mod.rs              # モジュール宣言
+│   │   ├── blur.rs             # ぼかし・モザイク（box blur, median, Gaussian, unsharp mask）
+│   │   ├── brightness.rs       # 明るさ・トーン調整（levels, gamma, brightness/contrast）
+│   │   ├── color.rs            # 色変換（反転, グレースケール, 塗り潰し, α合成）
+│   │   ├── sharpen.rs          # シャープ化（3x3 Laplacian, 強化版）
+│   │   └── transform.rs        # 幾何変換（回転, 反転, クロップ, リサイズ）
 │   │
 │   ├── prefetch/               # 先読みエンジン
 │   │   ├── mod.rs
@@ -56,6 +68,9 @@ gv3/
 │   │   ├── font.rs             # フォント管理（等幅フォント等）
 │   │   ├── info_dialog.rs      # 画像情報ダイアログ
 │   │   ├── page_dialog.rs      # ページ指定ジャンプダイアログ
+│   │   ├── filter_dialog.rs    # フィルタパラメータ入力ダイアログ
+│   │   ├── rotate_dialog.rs    # 回転角度入力ダイアログ
+│   │   ├── resize_dialog.rs    # リサイズダイアログ
 │   │   ├── file_list_panel.rs  # ファイルリストパネル（ListBox）
 │   │   └── menu.rs             # メニューバー構築・管理
 │   │

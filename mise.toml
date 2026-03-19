@@ -38,13 +38,53 @@ run = "cargo update"
 description = "cargo fmt --check"
 run = "cargo fmt --check"
 
+[tasks.check]
+description = "cargo check (fast compile check)"
+run = "cargo check"
+
+[tasks.fmt]
+description = "cargo fmt (auto-format)"
+run = "cargo fmt"
+
 [tasks.clippy]
 description = "cargo clippy"
 run = "cargo clippy -- -D warnings"
 
+[tasks.clippy-pedantic]
+description = "cargo clippy with pedantic warnings"
+run = """
+cargo clippy -- -D warnings -W clippy::pedantic \
+  -A clippy::cast_possible_truncation \
+  -A clippy::cast_possible_wrap \
+  -A clippy::cast_precision_loss \
+  -A clippy::cast_sign_loss \
+  -A clippy::cast_lossless \
+  -A clippy::missing_errors_doc \
+  -A clippy::missing_panics_doc \
+  -A clippy::module_name_repetitions \
+  -A clippy::must_use_candidate \
+  -A clippy::return_self_not_must_use \
+  -A clippy::struct_excessive_bools \
+  -A clippy::too_many_lines \
+  -A clippy::wildcard_imports \
+  -A clippy::doc_markdown \
+  -A clippy::needless_pass_by_value \
+  -A clippy::similar_names \
+  -A clippy::unreadable_literal \
+  -A clippy::items_after_statements
+"""
+
 [tasks.test]
 description = "cargo test"
 run = "cargo test"
+
+[tasks.audit]
+description = "cargo audit (vulnerability scan)"
+run = "cargo audit"
+
+[tasks.coverage]
+description = "cargo llvm-cov (coverage report)"
+run = "cargo llvm-cov --html"
 
 [tasks.textlint]
 description = "textlint docs"
