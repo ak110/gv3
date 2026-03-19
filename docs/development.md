@@ -20,7 +20,7 @@ mise run setup
 | `mise run build-release` | リリースビルド → `target/release/gv3.exe` |
 | `mise run run -- image.jpg` | 実行 |
 | `mise run format` | 自動整形（fmt + clippy --fix） |
-| `mise run test` | 全チェック（fmt + clippy + test + ドキュメントlint） |
+| `mise run test` | 全チェック（fmt + clippy + test + cargo-deny + ドキュメントlint） |
 | `mise run update` | 依存パッケージを最新に更新（メジャーバージョン含む） |
 
 `git push`時にはpre-pushフックが`mise run test`を自動実行する。

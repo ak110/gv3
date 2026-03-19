@@ -8,7 +8,7 @@ license = "MIT"
 repository = "https://github.com/ak110/gv3"
 
 [dependencies]
-windows = { version = "0.61", features = [
+windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
     "Win32_Graphics_Direct2D",
@@ -38,12 +38,12 @@ windows = { version = "0.61", features = [
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "bmp", "webp"] }
 png = "0.18"
 serde = { version = "1", features = ["derive"] }
-toml = "0.8"
+toml = "1.0"
 anyhow = "1"
 thiserror = "2"
 crossbeam-channel = "0.5"
 natord = "1.0"
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "7", default-features = false, features = ["deflate"] }
 unrar = "0.5"
 sevenz-rust = { version = "0.6", features = ["bzip2", "zstd", "aes256"] }
 libloading = "0.8"

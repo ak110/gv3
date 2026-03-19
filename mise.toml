@@ -5,11 +5,11 @@ pnpm = "latest"
 
 [tasks.setup]
 description = "Initial project setup (install deps + configure git hooks)"
-run = """
-cargo install cargo-edit
-pnpm install
-git config core.hooksPath .githooks
-"""
+run = [
+  "cargo install cargo-edit cargo-deny",
+  "pnpm install",
+  "git config core.hooksPath .githooks",
+]
 
 [tasks.build]
 description = "cargo build"
@@ -33,28 +33,29 @@ run = "cargo check"
 
 [tasks.format]
 description = "Auto-fix: fmt + clippy --fix"
-run = """
-cargo fmt
-cargo clippy --all-targets --fix --allow-dirty --allow-staged -- -D warnings
-"""
+run = [
+  "cargo fmt",
+  "cargo clippy --all-targets --fix --allow-dirty --allow-staged -- -D warnings",
+]
 
 [tasks.test]
-description = "All checks (fmt + clippy + test + doc lint)"
-run = """
-cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo test
-pnpm run textlint
-pnpm run markdownlint
-pnpm run prettier:check
-"""
+description = "All checks (fmt + clippy + test + deny + doc lint)"
+run = [
+  "cargo fmt --check",
+  "cargo clippy --all-targets -- -D warnings",
+  "cargo test",
+  "cargo deny check",
+  "pnpm run textlint",
+  "pnpm run markdownlint",
+  "pnpm run prettier:check",
+]
 
 [tasks.update]
 description = "Update all dependencies (including major versions)"
-run = """
-cargo upgrade
-cargo update
-"""
+run = [
+  "cargo upgrade",
+  "cargo update",
+]
 
 [tasks.coverage]
 description = "cargo llvm-cov (coverage report)"

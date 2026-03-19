@@ -2,15 +2,12 @@
 # https://embarkstudios.github.io/cargo-deny/
 
 [advisories]
-# 脆弱性アドバイザリチェック
-vulnerability = "deny"
-unmaintained = "warn"
-yanked = "warn"
-notice = "warn"
+# 脆弱性アドバイザリチェック（v2形式）
+version = 2
 
 [licenses]
+version = 2
 # ライセンス許可リスト
-unlicensed = "deny"
 allow = [
     "MIT",
     "Apache-2.0",
@@ -24,8 +21,6 @@ allow = [
     "Unlicense",
     "CDLA-Permissive-2.0",
 ]
-# LGPL は OR の一部としてのみ出現（MIT/Apache-2.0 が選択される）
-copyleft = "deny"
 
 [bans]
 multiple-versions = "warn"

@@ -27,12 +27,12 @@ pub fn get_pdf_page_count(pdf_path: &Path) -> Result<u32> {
     let hstring = windows::core::HSTRING::from(path_str);
     let file = StorageFile::GetFileFromPathAsync(&hstring)
         .context("StorageFile取得失敗")?
-        .get()
+        .join()
         .context("StorageFile非同期取得失敗")?;
 
     let doc = PdfDocument::LoadFromFileAsync(&file)
         .context("PdfDocument読み込み失敗")?
-        .get()
+        .join()
         .context("PdfDocument非同期読み込み失敗")?;
 
     doc.PageCount().context("ページ数取得失敗")
@@ -49,12 +49,12 @@ pub fn render_pdf_page(pdf_path: &Path, page_index: u32) -> Result<DecodedImage>
     let hstring = windows::core::HSTRING::from(path_str);
     let file = StorageFile::GetFileFromPathAsync(&hstring)
         .context("StorageFile取得失敗")?
-        .get()
+        .join()
         .context("StorageFile非同期取得失敗")?;
 
     let doc = PdfDocument::LoadFromFileAsync(&file)
         .context("PdfDocument読み込み失敗")?
-        .get()
+        .join()
         .context("PdfDocument非同期読み込み失敗")?;
 
     let page_count = doc.PageCount().context("ページ数取得失敗")?;
@@ -83,7 +83,7 @@ pub fn render_pdf_page(pdf_path: &Path, page_index: u32) -> Result<DecodedImage>
     let stream = InMemoryRandomAccessStream::new().context("ストリーム作成失敗")?;
     page.RenderWithOptionsToStreamAsync(&stream, &options)
         .context("レンダリング開始失敗")?
-        .get()
+        .join()
         .context("レンダリング失敗")?;
 
     // ストリームからバイト列を読み出す
@@ -93,7 +93,7 @@ pub fn render_pdf_page(pdf_path: &Path, page_index: u32) -> Result<DecodedImage>
     reader
         .LoadAsync(size)
         .context("データ読み込み開始失敗")?
-        .get()
+        .join()
         .context("データ読み込み失敗")?;
 
     let mut png_data = vec![0u8; size as usize];
