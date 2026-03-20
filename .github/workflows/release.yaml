@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       bump:
-        description: "バージョンの種類"
+        description: "バージョンアップの種類"
         required: true
         type: choice
         options:
@@ -26,20 +26,34 @@ jobs:
       - name: Verify CI passed
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
         run: |
-          $conclusion = gh api repos/${{ github.repository }}/commits/${{ github.sha }}/check-suites `
-            --jq '.check_suites[] | select(.app.slug == "github-actions") | .conclusion' `
-            | Select-Object -First 1
-          if ($conclusion -ne "success") {
-            Write-Error "CI has not passed on this commit (status: $conclusion). Push and wait for CI to pass before releasing."
-            exit 1
+          $maxAttempts = 30
+          $intervalSec = 20
+          for ($i = 1; $i -le $maxAttempts; $i++) {
+            $conclusion = gh api repos/${{ github.repository }}/commits/${{ github.sha }}/check-suites `
+              --jq '.check_suites[] | select(.app.slug == "github-actions") | .conclusion' `
+              | Select-Object -First 1
+            if ($conclusion -eq "success") {
+              Write-Host "CI passed."
+              exit 0
+            }
+            if ($conclusion -and $conclusion -ne "null") {
+              # 完了しているが success ではない
+              Write-Error "CI failed on this commit (status: $conclusion)."
+              exit 1
+            }
+            Write-Host "CI still running... waiting ${intervalSec}s (attempt $i/$maxAttempts)"
+            Start-Sleep -Seconds $intervalSec
           }
+          Write-Error "Timed out waiting for CI to complete (waited $($maxAttempts * $intervalSec)s)."
+          exit 1
 
       - name: Checkout
         uses: actions/checkout@v6
 
       - name: Setup tools
-        uses: jdx/mise-action@v3
+        uses: jdx/mise-action@v4
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
