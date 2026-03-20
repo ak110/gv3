@@ -93,7 +93,6 @@ jobs:
       - name: Update Cargo.lock
         run: cargo generate-lockfile
 
-      - run: mise run setup
       - run: mise run build-release
 
       - name: Create release archive
