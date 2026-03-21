@@ -11,30 +11,18 @@
 mise install && mise run setup
 ```
 
-## 主要タスク
-
-| コマンド | 内容 |
-| --- | --- |
-| `mise run build` | デバッグビルド |
-| `mise run build-release` | リリースビルド → `target/release/ぐらびゅ.exe` |
-| `mise run run -- image.jpg` | 実行 |
-| `mise run format` | 自動整形（fmt + clippy --fix） |
-| `mise run test` | 全チェック（fmt + clippy + test + cargo-deny + ドキュメントlint） |
-| `mise run update` | 依存パッケージを最新に更新（メジャーバージョン含む） |
-
 `git push`時にはpre-pushフックが`mise run test`を自動実行する。
 
 clippyのpedantic lint設定は`Cargo.toml`の`[lints.clippy]`セクションで管理している。
 
 ## キーバインド定義の管理
 
-デフォルトキーバインドは以下の3箇所で定義されている。変更時は全箇所を同期すること。
+デフォルトキーバインドは以下の2箇所で定義されている。変更時は両方を同期すること。
 
 | ファイル | 役割 |
-| --------- | ------ |
+| --- | --- |
 | `src/ui/key_config.rs` (`default_bindings()`) | 設定ファイル未指定時のハードコードデフォルト |
-| `ぐらびゅ.keys.default.toml` | ユーザー配布用のデフォルト設定テンプレート |
-| `docs/keybindings.md` | ドキュメント上のデフォルトキーバインド一覧 |
+| `ぐらびゅ.keys.default.toml` | ユーザー配布用のデフォルト設定テンプレート兼リファレンス |
 
 ## エラーハンドリング方針
 

@@ -256,7 +256,7 @@ impl KeyConfig {
         Ok(Self { bindings })
     }
 
-    /// デフォルトのキーバインディング（keybindings.mdのフルセット）
+    /// デフォルトのキーバインディング（ぐらびゅ.keys.default.tomlと同期）
     fn default_bindings() -> HashMap<InputChord, Action> {
         let mut m = HashMap::new();
 

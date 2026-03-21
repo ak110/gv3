@@ -79,8 +79,7 @@
 
 - @README.md
 - @docs/concept.md
-- @docs/features.md
+- @docs/user-guide.md
 - @docs/architecture.md
-- @docs/keybindings.md
 - @docs/development.md
 - @docs/agent-learned.md

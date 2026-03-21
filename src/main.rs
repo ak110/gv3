@@ -145,6 +145,6 @@ fn print_help() {
   F4                  ファイルリスト表示/非表示
   F1                  ヘルプ表示
 
-詳細は docs/keybindings.md を参照してください。"
+詳細は ぐらびゅ.keys.default.toml を参照してください。"
     );
 }

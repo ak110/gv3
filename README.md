@@ -39,7 +39,7 @@ REM ファイル関連付けやD&Dでも起動可能
 | Alt+Enter         | フルスクリーン          |
 | Esc               | メニューバー表示/非表示 |
 
-全キーバインドの一覧は [docs/keybindings.md](docs/keybindings.md) を参照してください。
+全キーバインドの一覧は [docs/user-guide.md](docs/user-guide.md) を参照してください。
 
 ### 設定ファイル
 
