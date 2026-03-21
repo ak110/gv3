@@ -21,14 +21,10 @@ const CLASS_NAME: &str = "gv_info_dialog\0";
 
 // 子コントロールID
 const ID_EDIT: u16 = 0x200;
-const ID_BUTTON: u16 = 0x201;
 
 /// ダイアログのデフォルトサイズ
-const DIALOG_WIDTH: i32 = 520;
-const DIALOG_HEIGHT: i32 = 400;
-const BUTTON_WIDTH: i32 = 80;
-const BUTTON_HEIGHT: i32 = 28;
-const MARGIN: i32 = 8;
+const DIALOG_WIDTH: i32 = 640;
+const DIALOG_HEIGHT: i32 = 480;
 
 /// 情報ダイアログを表示する（モーダル）
 ///
@@ -84,8 +80,11 @@ pub fn show_info_dialog(parent: HWND, title: &str, text: &str, font: HFONT) {
             return;
         }
 
-        // 子コントロール作成
-        let edit_height = DIALOG_HEIGHT - BUTTON_HEIGHT - MARGIN * 4 - get_titlebar_height();
+        // クライアント領域の実サイズを取得してEDITコントロールを配置
+        let mut client_rect = windows::Win32::Foundation::RECT::default();
+        let _ = GetClientRect(hwnd, std::ptr::from_mut(&mut client_rect));
+        let client_w = client_rect.right - client_rect.left;
+        let client_h = client_rect.bottom - client_rect.top;
         let edit_hwnd = CreateWindowExW(
             WS_EX_CLIENTEDGE,
             windows::core::w!("EDIT"),
@@ -94,15 +93,14 @@ pub fn show_info_dialog(parent: HWND, title: &str, text: &str, font: HFONT) {
                 WS_CHILD.0
                     | WS_VISIBLE.0
                     | WS_VSCROLL.0
-                    | WS_HSCROLL.0
                     | ES_MULTILINE as u32
                     | ES_READONLY as u32
                     | ES_AUTOVSCROLL as u32,
             ),
-            MARGIN,
-            MARGIN,
-            DIALOG_WIDTH - MARGIN * 2 - get_frame_width() * 2,
-            edit_height,
+            0,
+            0,
+            client_w,
+            client_h,
             Some(hwnd),
             Some(HMENU(ID_EDIT as *mut _)),
             None,
@@ -117,26 +115,6 @@ pub fn show_info_dialog(parent: HWND, title: &str, text: &str, font: HFONT) {
             .chain(std::iter::once(0))
             .collect();
         let _ = SetWindowTextW(edit_hwnd, windows::core::PCWSTR(text_wide.as_ptr()));
-
-        // 閉じるボタン
-        let button_x = (DIALOG_WIDTH - get_frame_width() * 2 - BUTTON_WIDTH) / 2;
-        let button_y = edit_height + MARGIN * 2;
-        let close_label: Vec<u16> = "閉じる\0".encode_utf16().collect();
-        let _button_hwnd = CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            windows::core::w!("BUTTON"),
-            windows::core::PCWSTR(close_label.as_ptr()),
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-            button_x,
-            button_y,
-            BUTTON_WIDTH,
-            BUTTON_HEIGHT,
-            Some(hwnd),
-            Some(HMENU(ID_BUTTON as *mut _)),
-            None,
-            None,
-        )
-        .unwrap_or_default();
 
         // フォント適用
         if !font.is_invalid() {
@@ -195,7 +173,8 @@ unsafe extern "system" fn dialog_wnd_proc(
             }
             WM_COMMAND => {
                 let control_id = (wparam.0 as u32) & 0xFFFF;
-                if control_id == ID_BUTTON as u32 {
+                // Esc（IsDialogMessageWがIDCANCEL=2に変換）
+                if control_id == 2 {
                     if let Some(data) = get_dialog_data(hwnd) {
                         data.closed = true;
                     }
@@ -231,14 +210,4 @@ fn center_on_parent(parent: HWND, width: i32, height: i32) -> (i32, i32) {
     let cx = i32::midpoint(rect.left, rect.right) - width / 2;
     let cy = i32::midpoint(rect.top, rect.bottom) - height / 2;
     (cx.max(0), cy.max(0))
-}
-
-/// タイトルバーの高さ（概算）
-fn get_titlebar_height() -> i32 {
-    unsafe { GetSystemMetrics(SM_CYCAPTION) + GetSystemMetrics(SM_CYSIZEFRAME) }
-}
-
-/// ウィンドウフレーム幅（概算）
-fn get_frame_width() -> i32 {
-    unsafe { GetSystemMetrics(SM_CXFIXEDFRAME) }
 }

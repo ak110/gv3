@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::os::windows::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -1151,7 +1152,10 @@ impl AppWindow {
                 crate::file_info::FileSource::File(path) => path.clone(),
             };
             let arg = format!("/select,{}", target.display());
-            if let Err(e) = std::process::Command::new("explorer.exe").arg(&arg).spawn() {
+            if let Err(e) = std::process::Command::new("explorer.exe")
+                .raw_arg(&arg)
+                .spawn()
+            {
                 self.show_error_title(&format!("エクスプローラ起動失敗: {e}"));
             }
         }
@@ -1961,6 +1965,19 @@ impl AppWindow {
         }
     }
 
+    /// 数値を3桁カンマ区切りでフォーマットする
+    fn format_with_commas(n: u64) -> String {
+        let s = n.to_string();
+        let mut result = String::with_capacity(s.len() + s.len() / 3);
+        for (i, c) in s.chars().enumerate() {
+            if i > 0 && (s.len() - i).is_multiple_of(3) {
+                result.push(',');
+            }
+            result.push(c);
+        }
+        result
+    }
+
     /// 画像情報を表示する
     fn show_image_info(&self) {
         let Some(source) = self.document.current_source() else {
@@ -1972,7 +1989,10 @@ impl AppWindow {
 
         let mut info_lines = Vec::new();
         info_lines.push(format!("パス: {}", source.display_path()));
-        info_lines.push(format!("ファイルサイズ: {} bytes", file_info.file_size));
+        info_lines.push(format!(
+            "ファイルサイズ: {} KiB",
+            Self::format_with_commas(file_info.file_size / 1024)
+        ));
 
         if let Some(img) = self.document.current_image() {
             info_lines.push(format!("画像サイズ: {} x {}", img.width, img.height));
@@ -1986,7 +2006,7 @@ impl AppWindow {
             }
         }
 
-        let text = info_lines.join("\n");
+        let text = info_lines.join("\n\n");
         info_dialog::show_info_dialog(self.hwnd, "画像情報", &text, self.monospace_font.hfont());
     }
 

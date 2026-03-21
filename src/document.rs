@@ -431,6 +431,7 @@ impl Document {
                     if page_count == 0 {
                         continue;
                     }
+                    let pdf_file_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
                     for i in 0..page_count {
                         let info = crate::file_info::FileInfo {
                             path: path.clone(),
@@ -439,7 +440,7 @@ impl Document {
                                 page_index: i,
                             },
                             file_name: format!("Page {:03}", i + 1),
-                            file_size: 0,
+                            file_size: pdf_file_size,
                             modified: std::time::SystemTime::now(),
                             marked: false,
                             load_failed: false,
