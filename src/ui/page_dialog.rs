@@ -69,7 +69,7 @@ pub fn show_page_dialog(parent: HWND, current: usize, total: usize) -> Option<us
         let data_ptr = std::ptr::from_mut(&mut data);
 
         // 親ウィンドウの中心に配置
-        let (x, y) = center_on_parent(parent, DIALOG_WIDTH, DIALOG_HEIGHT);
+        let (x, y) = super::center_on_parent(parent, DIALOG_WIDTH, DIALOG_HEIGHT);
 
         let class_wide: Vec<u16> = CLASS_NAME.encode_utf16().collect();
         let title_wide: Vec<u16> = "ページ指定移動\0".encode_utf16().collect();
@@ -283,15 +283,4 @@ unsafe fn get_dialog_data(hwnd: HWND) -> Option<&'static mut DialogData> {
         let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut DialogData;
         if ptr.is_null() { None } else { Some(&mut *ptr) }
     }
-}
-
-/// 親ウィンドウの中心座標を計算
-fn center_on_parent(parent: HWND, width: i32, height: i32) -> (i32, i32) {
-    let mut rect = windows::Win32::Foundation::RECT::default();
-    unsafe {
-        let _ = GetWindowRect(parent, std::ptr::from_mut(&mut rect));
-    }
-    let cx = i32::midpoint(rect.left, rect.right) - width / 2;
-    let cy = i32::midpoint(rect.top, rect.bottom) - height / 2;
-    (cx.max(0), cy.max(0))
 }

@@ -1,97 +1,98 @@
 //! Win32 Shell APIによるファイル操作 + ダイアログ
 
+use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
 use windows::Win32::Foundation::HWND;
-use windows::Win32::UI::Shell::{FO_COPY, FO_DELETE, FO_MOVE, FOF_ALLOWUNDO, FOF_MULTIDESTFILES};
 use windows::Win32::UI::Shell::{
     FOS_FILEMUSTEXIST, FOS_FORCEFILESYSTEM, FOS_OVERWRITEPROMPT, FOS_PATHMUSTEXIST,
-    FOS_PICKFOLDERS, IFileOpenDialog, IFileSaveDialog, SHFILEOPSTRUCTW, SHFileOperationW,
+    FOS_PICKFOLDERS, IFileOpenDialog, IFileSaveDialog,
 };
 
 use crate::util::to_wide;
 
-/// SHFileOperationWの共通ラッパー
-/// 成功時はtrue、ユーザーキャンセル時はfalseを返す
-fn sh_file_operation(
-    hwnd: HWND,
-    func: u32,
-    from: &[u16],
-    to: Option<&[u16]>,
-    flags: u16,
-    error_msg: &str,
-) -> Result<bool> {
-    let mut op = SHFILEOPSTRUCTW {
-        hwnd,
-        wFunc: func,
-        pFrom: windows::core::PCWSTR(from.as_ptr()),
-        pTo: to.map_or(windows::core::PCWSTR::null(), |t| {
-            windows::core::PCWSTR(t.as_ptr())
-        }),
-        fFlags: flags,
-        ..Default::default()
-    };
-
-    let result = unsafe { SHFileOperationW(std::ptr::from_mut(&mut op)) };
-    if result != 0 {
-        if op.fAnyOperationsAborted.as_bool() {
-            return Ok(false);
-        }
-        anyhow::bail!("{error_msg} (code: 0x{result:04X})");
-    }
-    Ok(!op.fAnyOperationsAborted.as_bool())
-}
-
-/// ごみ箱経由でファイルを削除する
+/// IFileOperationによるファイル削除（ごみ箱経由）
 pub fn delete_to_recycle_bin(hwnd: HWND, paths: &[&Path]) -> Result<bool> {
     if paths.is_empty() {
         return Ok(false);
     }
-    let from = build_multi_path_string(paths);
-    sh_file_operation(
-        hwnd,
-        FO_DELETE,
-        &from,
-        None,
-        FOF_ALLOWUNDO.0 as u16,
-        "ファイル削除に失敗しました",
-    )
+    unsafe {
+        let op = create_file_operation(hwnd, FOFLAG_ALLOWUNDO | FOFLAG_WANTNUKEWARNING)?;
+        for path in paths {
+            let item = create_shell_item_strict(path)?;
+            op.DeleteItem(&item, None)
+                .context("DeleteItemの設定に失敗しました")?;
+        }
+        perform_operations(&op, "ファイル削除に失敗しました")
+    }
 }
 
-/// ファイルを移動する（SHFileOperationW）
-/// pToはディレクトリ（複数ファイルを一つのフォルダに移動）
+/// IFileOperationによるファイル移動（複数→ディレクトリ）
 pub fn move_files(hwnd: HWND, paths: &[&Path], dest: &Path) -> Result<bool> {
     if paths.is_empty() {
         return Ok(false);
     }
-    let from = build_multi_path_string(paths);
-    let to = build_single_path_string(dest);
-    sh_file_operation(
-        hwnd,
-        FO_MOVE,
-        &from,
-        Some(&to),
-        FOF_ALLOWUNDO.0 as u16,
-        &format!("ファイル移動に失敗しました\n  dest: {}", dest.display()),
-    )
+    unsafe {
+        let op = create_file_operation(hwnd, FOFLAG_ALLOWUNDO)?;
+        let dest_folder = create_shell_item_strict(dest)?;
+        for path in paths {
+            let item = create_shell_item_strict(path)?;
+            op.MoveItem(&item, &dest_folder, None, None)
+                .context("MoveItemの設定に失敗しました")?;
+        }
+        perform_operations(
+            &op,
+            &format!("ファイル移動に失敗しました\n  dest: {}", dest.display()),
+        )
+    }
 }
 
-/// ファイルをコピーする（SHFileOperationW）
+/// IFileOperationによるファイルコピー（複数→ディレクトリ）
 pub fn copy_files(hwnd: HWND, paths: &[&Path], dest: &Path) -> Result<bool> {
     if paths.is_empty() {
         return Ok(false);
     }
-    let from = build_multi_path_string(paths);
-    let to = build_single_path_string(dest);
-    sh_file_operation(
-        hwnd,
-        FO_COPY,
-        &from,
-        Some(&to),
-        FOF_ALLOWUNDO.0 as u16,
-        "ファイルコピーに失敗しました",
-    )
+    unsafe {
+        let op = create_file_operation(hwnd, FOFLAG_ALLOWUNDO)?;
+        let dest_folder = create_shell_item_strict(dest)?;
+        for path in paths {
+            let item = create_shell_item_strict(path)?;
+            op.CopyItem(&item, &dest_folder, None, None)
+                .context("CopyItemの設定に失敗しました")?;
+        }
+        perform_operations(&op, "ファイルコピーに失敗しました")
+    }
+}
+
+/// 単一ファイルの移動（リネーム対応）
+/// 移動先の親ディレクトリをIShellItemにし、ファイル名をMoveItemの引数で指定する
+pub fn move_single_file(hwnd: HWND, src: &Path, dest: &Path) -> Result<bool> {
+    unsafe {
+        let op = create_file_operation(hwnd, FOFLAG_ALLOWUNDO)?;
+        let src_item = create_shell_item_strict(src)?;
+        let dest_parent = dest
+            .parent()
+            .context("移動先の親ディレクトリがありません")?;
+        let dest_folder = create_shell_item_strict(dest_parent)?;
+        let new_name = dest.file_name().context("移動先のファイル名がありません")?;
+        let new_name_wide: Vec<u16> = new_name.encode_wide().chain(std::iter::once(0)).collect();
+        op.MoveItem(
+            &src_item,
+            &dest_folder,
+            windows::core::PCWSTR(new_name_wide.as_ptr()),
+            None,
+        )
+        .context("MoveItemの設定に失敗しました")?;
+        perform_operations(
+            &op,
+            &format!(
+                "ファイル移動に失敗しました\n  src: {}\n  dest: {}",
+                src.display(),
+                dest.display()
+            ),
+        )
+    }
 }
 
 /// ファイル選択ダイアログ（IFileOpenDialog）
@@ -313,27 +314,66 @@ pub fn open_bookmark_dialog(hwnd: HWND) -> Result<Option<PathBuf>> {
     }
 }
 
-/// 単一ファイルの移動（リネーム対応）
-/// SHFileOperationW (FO_MOVE) で pTo にファイルパスを指定し、移動+リネームに対応する
-pub fn move_single_file(hwnd: HWND, src: &Path, dest: &Path) -> Result<bool> {
-    let from = build_single_path_string(src);
-    let to = build_single_path_string(dest);
-    // FOF_MULTIDESTFILES: pToをディレクトリではなくファイルパスとして解釈させる
-    sh_file_operation(
-        hwnd,
-        FO_MOVE,
-        &from,
-        Some(&to),
-        (FOF_ALLOWUNDO.0 | FOF_MULTIDESTFILES.0) as u16,
-        &format!(
-            "ファイル移動に失敗しました\n  src: {}\n  dest: {}",
-            src.display(),
-            dest.display()
-        ),
-    )
+// --- IFileOperation ヘルパー ---
+
+use windows::Win32::UI::Shell::FILEOPERATION_FLAGS;
+
+/// IFileOperationのフラグ定数
+const FOFLAG_ALLOWUNDO: FILEOPERATION_FLAGS = FILEOPERATION_FLAGS(0x0040);
+const FOFLAG_WANTNUKEWARNING: FILEOPERATION_FLAGS = FILEOPERATION_FLAGS(0x4000);
+
+/// IFileOperationを作成し、親ウィンドウとフラグを設定する
+unsafe fn create_file_operation(
+    hwnd: HWND,
+    flags: FILEOPERATION_FLAGS,
+) -> Result<windows::Win32::UI::Shell::IFileOperation> {
+    unsafe {
+        let op: windows::Win32::UI::Shell::IFileOperation =
+            windows::Win32::System::Com::CoCreateInstance(
+                &windows::Win32::UI::Shell::FileOperation,
+                None,
+                windows::Win32::System::Com::CLSCTX_INPROC_SERVER,
+            )
+            .context("IFileOperation作成失敗")?;
+        op.SetOwnerWindow(hwnd)?;
+        op.SetOperationFlags(flags)?;
+        Ok(op)
+    }
+}
+
+/// IFileOperationの操作を実行し、結果を返す
+/// 成功時はtrue、ユーザーキャンセル時はfalseを返す
+unsafe fn perform_operations(
+    op: &windows::Win32::UI::Shell::IFileOperation,
+    error_msg: &str,
+) -> Result<bool> {
+    unsafe {
+        op.PerformOperations().context(error_msg.to_string())?;
+        let aborted = op.GetAnyOperationsAborted()?;
+        Ok(!aborted.as_bool())
+    }
+}
+
+/// SHCreateItemFromParsingNameでIShellItemを取得する（エラー時はResult）
+/// ファイル操作用: 対象パスが存在しない場合はエラーとして扱う
+fn create_shell_item_strict(path: &Path) -> Result<windows::Win32::UI::Shell::IShellItem> {
+    let path = crate::util::strip_extended_length_prefix(path);
+    let wide: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    unsafe {
+        windows::Win32::UI::Shell::SHCreateItemFromParsingName(
+            windows::core::PCWSTR(wide.as_ptr()),
+            None,
+        )
+        .with_context(|| format!("ShellItem作成失敗: {}", path.display()))
+    }
 }
 
 /// SHCreateItemFromParsingNameでIShellItemを取得するヘルパー
+/// ダイアログの初期フォルダ設定用: 失敗時はNoneを返す
 fn create_shell_item(dir: &Path) -> Option<windows::Win32::UI::Shell::IShellItem> {
     unsafe {
         let dir_wide: Vec<u16> = dir
@@ -348,26 +388,3 @@ fn create_shell_item(dir: &Path) -> Option<windows::Win32::UI::Shell::IShellItem
         .ok()
     }
 }
-
-/// SHFileOperationW用のダブルNUL終端パス文字列を構築する（複数パス対応）
-fn build_multi_path_string(paths: &[&Path]) -> Vec<u16> {
-    let mut result = Vec::new();
-    for path in paths {
-        let path = crate::util::strip_extended_length_prefix(path);
-        result.extend(path.as_os_str().encode_wide());
-        result.push(0); // 各パスの後にNUL
-    }
-    result.push(0); // 終端の追加NUL
-    result
-}
-
-/// SHFileOperationW用のダブルNUL終端パス文字列を構築する（単一パス）
-fn build_single_path_string(path: &Path) -> Vec<u16> {
-    let path = crate::util::strip_extended_length_prefix(path);
-    let mut result: Vec<u16> = path.as_os_str().encode_wide().collect();
-    result.push(0);
-    result.push(0);
-    result
-}
-
-use std::os::windows::ffi::OsStrExt;
