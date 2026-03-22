@@ -1,4 +1,5 @@
 use anyhow::{Context as _, Result};
+use fast_image_resize as fr;
 use rayon::prelude::*;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Direct2D::Common::{
@@ -238,27 +239,21 @@ impl D2DRenderer {
             return unsafe { self.get_or_create_bitmap(image) };
         }
 
-        // 縮小時は平均画素法（モアレ・リンギングが出にくい）、拡大時はLanczos3
+        // 縮小時はSuperSampling（モアレ・リンギング抑制）、拡大時はLanczos3
         let is_shrink = target_width <= image.width && target_height <= image.height;
-        let resized_data = if is_shrink {
-            area_average_resize(
-                &image.data,
-                image.width,
-                image.height,
-                target_width,
-                target_height,
-            )
+        let resize_alg = if is_shrink {
+            fr::ResizeAlg::SuperSampling(fr::FilterType::Lanczos3, 2)
         } else {
-            let src = image::RgbaImage::from_raw(image.width, image.height, image.data.clone())
-                .ok_or_else(|| anyhow::anyhow!("RgbaImage作成失敗"))?;
-            image::imageops::resize(
-                &src,
-                target_width,
-                target_height,
-                image::imageops::FilterType::Lanczos3,
-            )
-            .into_raw()
+            fr::ResizeAlg::Convolution(fr::FilterType::Lanczos3)
         };
+        let resized_data = fir_resize(
+            &image.data,
+            image.width,
+            image.height,
+            target_width,
+            target_height,
+            resize_alg,
+        )?;
 
         let prescaled = DecodedImage {
             data: resized_data,
@@ -279,19 +274,7 @@ impl D2DRenderer {
     /// RGBA画像データからD2Dビットマップを作成
     /// image crateはRGBA、D2DはBGRA前提なのでチャネル入れ替え + premultiplied alpha変換が必要
     unsafe fn create_bitmap_from_image(&self, image: &DecodedImage) -> Result<ID2D1Bitmap> {
-        // RGBA → premultiplied BGRA変換
-        let mut bgra_data = image.data.clone();
-        for pixel in bgra_data.chunks_exact_mut(4) {
-            let r = pixel[0];
-            let g = pixel[1];
-            let b = pixel[2];
-            let a = pixel[3] as u16;
-            // premultiplied alpha: 各チャネルにalpha/255を乗算
-            pixel[0] = ((b as u16 * a) / 255) as u8; // B
-            pixel[1] = ((g as u16 * a) / 255) as u8; // G
-            pixel[2] = ((r as u16 * a) / 255) as u8; // R
-            // pixel[3] = a (そのまま)
-        }
+        let bgra_data = rgba_to_premultiplied_bgra(&image.data);
 
         let size = D2D_SIZE_U {
             width: image.width,
@@ -611,73 +594,46 @@ impl D2DRenderer {
     }
 }
 
-/// 平均画素法による画像縮小（縮小専用）
-/// 各出力ピクセルに対応するソース矩形内の全ピクセルの面積加重平均で計算する。
-/// Lanczos3と異なりリンギングやモアレが発生しにくい。
-fn area_average_resize(src: &[u8], src_w: u32, src_h: u32, dst_w: u32, dst_h: u32) -> Vec<u8> {
-    let row_bytes = (dst_w * 4) as usize;
-    let mut dst = vec![0u8; (dst_w * dst_h * 4) as usize];
+/// RGBA → premultiplied BGRA変換（rayon並列化）
+fn rgba_to_premultiplied_bgra(rgba: &[u8]) -> Vec<u8> {
+    let mut bgra = rgba.to_vec();
+    let row_bytes = 4 * 256; // 256ピクセル単位でチャンク分割
+    bgra.par_chunks_mut(row_bytes).for_each(|chunk| {
+        for pixel in chunk.chunks_exact_mut(4) {
+            let r = pixel[0];
+            let g = pixel[1];
+            let b = pixel[2];
+            let a = pixel[3] as u16;
+            // premultiplied alpha: 各チャネルにalpha/255を乗算
+            pixel[0] = ((b as u16 * a) / 255) as u8; // B
+            pixel[1] = ((g as u16 * a) / 255) as u8; // G
+            pixel[2] = ((r as u16 * a) / 255) as u8; // R
+            // pixel[3] = a (そのまま)
+        }
+    });
+    bgra
+}
 
-    let sx = src_w as f64 / dst_w as f64;
-    let sy = src_h as f64 / dst_h as f64;
-
-    // 各出力行は独立しているため rayon で並列処理
-    dst.par_chunks_mut(row_bytes)
-        .enumerate()
-        .for_each(|(dy, row)| {
-            let dy = dy as u32;
-            let y0 = dy as f64 * sy;
-            let y1 = ((dy + 1) as f64 * sy).min(src_h as f64);
-
-            for dx in 0..dst_w {
-                let x0 = dx as f64 * sx;
-                let x1 = ((dx + 1) as f64 * sx).min(src_w as f64);
-
-                let mut r_sum = 0.0_f64;
-                let mut g_sum = 0.0_f64;
-                let mut b_sum = 0.0_f64;
-                let mut a_sum = 0.0_f64;
-                let mut weight_sum = 0.0_f64;
-
-                // ソース矩形にかかる全ピクセルを走査
-                let iy_start = y0.floor() as u32;
-                let iy_end = (y1.ceil() as u32).min(src_h);
-                let ix_start = x0.floor() as u32;
-                let ix_end = (x1.ceil() as u32).min(src_w);
-
-                for iy in iy_start..iy_end {
-                    // このソース行がカバーする垂直方向の面積割合
-                    let fy0 = (iy as f64).max(y0);
-                    let fy1 = ((iy + 1) as f64).min(y1);
-                    let wy = fy1 - fy0;
-
-                    for ix in ix_start..ix_end {
-                        // このソースピクセルがカバーする水平方向の面積割合
-                        let fx0 = (ix as f64).max(x0);
-                        let fx1 = ((ix + 1) as f64).min(x1);
-                        let wx = fx1 - fx0;
-
-                        let w = wx * wy;
-                        let offset = ((iy * src_w + ix) * 4) as usize;
-                        r_sum += src[offset] as f64 * w;
-                        g_sum += src[offset + 1] as f64 * w;
-                        b_sum += src[offset + 2] as f64 * w;
-                        a_sum += src[offset + 3] as f64 * w;
-                        weight_sum += w;
-                    }
-                }
-
-                let dst_offset = (dx * 4) as usize;
-                if weight_sum > 0.0 {
-                    row[dst_offset] = (r_sum / weight_sum).round() as u8;
-                    row[dst_offset + 1] = (g_sum / weight_sum).round() as u8;
-                    row[dst_offset + 2] = (b_sum / weight_sum).round() as u8;
-                    row[dst_offset + 3] = (a_sum / weight_sum).round() as u8;
-                }
-            }
-        });
-
-    dst
+/// fast_image_resizeによるリサイズ（SIMD加速）
+fn fir_resize(
+    src: &[u8],
+    src_w: u32,
+    src_h: u32,
+    dst_w: u32,
+    dst_h: u32,
+    resize_alg: fr::ResizeAlg,
+) -> Result<Vec<u8>> {
+    let mut src_buf = src.to_vec();
+    let src_image =
+        fr::images::Image::from_slice_u8(src_w, src_h, &mut src_buf, fr::PixelType::U8x4)
+            .context("リサイズ用ソース画像作成失敗")?;
+    let mut dst_image = fr::images::Image::new(dst_w, dst_h, fr::PixelType::U8x4);
+    let options = fr::ResizeOptions::new().resize_alg(resize_alg);
+    let mut resizer = fr::Resizer::new();
+    resizer
+        .resize(&src_image, &mut dst_image, &options)
+        .context("画像リサイズ失敗")?;
+    Ok(dst_image.into_vec())
 }
 
 #[cfg(test)]
@@ -685,53 +641,88 @@ mod tests {
     use super::*;
 
     #[test]
-    fn area_average_2x2_to_1x1() {
-        // 4色の平均: R=(255+0+0+0)/4=63.75, G=(0+255+0+0)/4=63.75, B=(0+0+255+0)/4=63.75, A=255
-        #[rustfmt::skip]
-        let src: Vec<u8> = vec![
-            255, 0,   0,   255,   0, 255,   0, 255,
-              0, 0, 255,   255,   0,   0,   0, 255,
-        ];
-        let result = area_average_resize(&src, 2, 2, 1, 1);
-        assert_eq!(result.len(), 4);
-        assert_eq!(result[0], 64); // R: round(63.75)
-        assert_eq!(result[1], 64); // G
-        assert_eq!(result[2], 64); // B
-        assert_eq!(result[3], 255); // A
+    fn fir_resize_shrink_output_size() {
+        // 4x4 → 2x2: 出力バッファサイズの検証
+        let src: Vec<u8> = [100, 150, 200, 255].repeat(16);
+        let result = fir_resize(
+            &src,
+            4,
+            4,
+            2,
+            2,
+            fr::ResizeAlg::SuperSampling(fr::FilterType::Lanczos3, 2),
+        )
+        .unwrap();
+        assert_eq!(result.len(), 2 * 2 * 4);
     }
 
     #[test]
-    fn area_average_same_size() {
-        let src: Vec<u8> = vec![10, 20, 30, 255, 40, 50, 60, 128];
-        let result = area_average_resize(&src, 2, 1, 2, 1);
-        assert_eq!(result, src);
+    fn fir_resize_enlarge_output_size() {
+        // 2x2 → 4x4: 出力バッファサイズの検証
+        let src: Vec<u8> = [100, 150, 200, 255].repeat(4);
+        let result = fir_resize(
+            &src,
+            2,
+            2,
+            4,
+            4,
+            fr::ResizeAlg::Convolution(fr::FilterType::Lanczos3),
+        )
+        .unwrap();
+        assert_eq!(result.len(), 4 * 4 * 4);
     }
 
     #[test]
-    fn area_average_4x4_to_2x2_uniform() {
-        // 全ピクセル同じ色 → 結果も同じ色
-        let src: Vec<u8> = vec![[100u8, 150, 200, 255]; 16]
-            .into_iter()
-            .flatten()
-            .collect();
-        let result = area_average_resize(&src, 4, 4, 2, 2);
-        assert_eq!(result.len(), 16);
+    fn fir_resize_uniform_shrink() {
+        // 均一色画像の縮小 → 結果も同じ色（alpha=255なので誤差なし）
+        let src: Vec<u8> = [100, 150, 200, 255].repeat(16);
+        let result = fir_resize(
+            &src,
+            4,
+            4,
+            2,
+            2,
+            fr::ResizeAlg::SuperSampling(fr::FilterType::Lanczos3, 2),
+        )
+        .unwrap();
         for pixel in result.chunks_exact(4) {
             assert_eq!(pixel, [100, 150, 200, 255]);
         }
     }
 
     #[test]
-    fn area_average_3x3_to_2x2() {
-        // 3x3 白→2x2: 全ピクセル白なので結果も白
-        let src: Vec<u8> = vec![[255u8, 255, 255, 255]; 9]
-            .into_iter()
-            .flatten()
-            .collect();
-        let result = area_average_resize(&src, 3, 3, 2, 2);
-        assert_eq!(result.len(), 16);
+    fn fir_resize_alpha_no_halo() {
+        // 半透明境界のリサイズでハロー（白フリンジ）が出ないことを検証
+        // 上半分: 赤(alpha=255)、下半分: 赤(alpha=0)
+        let mut src = Vec::with_capacity(4 * 4 * 4);
+        for y in 0..4u32 {
+            for _ in 0..4u32 {
+                if y < 2 {
+                    src.extend_from_slice(&[255, 0, 0, 255]); // 不透明な赤
+                } else {
+                    src.extend_from_slice(&[0, 0, 0, 0]); // 完全透明
+                }
+            }
+        }
+        let result = fir_resize(
+            &src,
+            4,
+            4,
+            2,
+            2,
+            fr::ResizeAlg::SuperSampling(fr::FilterType::Lanczos3, 2),
+        )
+        .unwrap();
+        // alpha境界付近のピクセルで、RGB値が不自然に白くならないことを確認
         for pixel in result.chunks_exact(4) {
-            assert_eq!(pixel, [255, 255, 255, 255]);
+            let a = pixel[3] as u16;
+            if a > 0 {
+                // alpha > 0 のピクセルは、G/Bチャネルが不自然に高くならない
+                assert!(
+                    pixel[1] < 30 && pixel[2] < 30,
+                    "ハロー検出: pixel={pixel:?}"
+                );
+            }
         }
     }
 }

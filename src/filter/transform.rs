@@ -210,7 +210,7 @@ pub fn rotate_arbitrary(image: &DecodedImage, degrees: f64) -> DecodedImage {
     }
 }
 
-/// 解像度変更（Lanczos3リサイズ）
+/// 解像度変更（Lanczos3リサイズ、SIMD加速）
 pub fn resize(image: &DecodedImage, new_width: u32, new_height: u32) -> DecodedImage {
     if new_width == 0 || new_height == 0 {
         return DecodedImage {
@@ -219,15 +219,24 @@ pub fn resize(image: &DecodedImage, new_width: u32, new_height: u32) -> DecodedI
             height: image.height,
         };
     }
-    let src = image::RgbaImage::from_raw(image.width, image.height, image.data.clone()).unwrap();
-    let resized = image::imageops::resize(
-        &src,
-        new_width,
-        new_height,
-        image::imageops::FilterType::Lanczos3,
-    );
+    use fast_image_resize as fr;
+    let mut src_buf = image.data.clone();
+    let src_image = fr::images::Image::from_slice_u8(
+        image.width,
+        image.height,
+        &mut src_buf,
+        fr::PixelType::U8x4,
+    )
+    .expect("リサイズ用ソース画像作成失敗");
+    let mut dst_image = fr::images::Image::new(new_width, new_height, fr::PixelType::U8x4);
+    let options =
+        fr::ResizeOptions::new().resize_alg(fr::ResizeAlg::Convolution(fr::FilterType::Lanczos3));
+    let mut resizer = fr::Resizer::new();
+    resizer
+        .resize(&src_image, &mut dst_image, &options)
+        .expect("画像リサイズ失敗");
     DecodedImage {
-        data: resized.into_raw(),
+        data: dst_image.into_vec(),
         width: new_width,
         height: new_height,
     }
