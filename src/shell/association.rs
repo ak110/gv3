@@ -131,8 +131,11 @@ fn remove_open_with_progid(extension: &str, progid: &str) {
 /// 画像拡張子リスト
 const IMAGE_EXTENSIONS: &[&str] = &[".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"];
 
-/// アーカイブ拡張子リスト
-const ARCHIVE_EXTENSIONS: &[&str] = &[".zip", ".cbz", ".rar", ".cbr", ".7z"];
+/// アーカイブ拡張子リスト（コミック用のみ関連付け）
+const ARCHIVE_EXTENSIONS: &[&str] = &[".cbz", ".cbr"];
+
+/// 汎用アーカイブ拡張子（関連付け解除のみ、登録はしない）
+const GENERIC_ARCHIVE_EXTENSIONS: &[&str] = &[".zip", ".rar", ".7z"];
 
 const IMAGE_PROGID: &str = "gv.ImageFile";
 const ARCHIVE_PROGID: &str = "gv.ArchiveFile";
@@ -203,6 +206,11 @@ pub fn register() -> Result<()> {
         &format!("\"{exe}\",2"),
     )?;
 
+    // 汎用アーカイブの既存関連付けをクリーンアップ（再登録時に古い関連付けが残らないように）
+    for ext in GENERIC_ARCHIVE_EXTENSIONS {
+        remove_open_with_progid(ext, ARCHIVE_PROGID);
+    }
+
     // 各拡張子にOpenWithProgidsを登録
     for ext in IMAGE_EXTENSIONS {
         add_open_with_progid(ext, IMAGE_PROGID)?;
@@ -240,6 +248,9 @@ fn cleanup_old_progids() -> Result<()> {
     for ext in ARCHIVE_EXTENSIONS {
         remove_open_with_progid(ext, OLD_ARCHIVE_PROGID);
     }
+    for ext in GENERIC_ARCHIVE_EXTENSIONS {
+        remove_open_with_progid(ext, OLD_ARCHIVE_PROGID);
+    }
     remove_open_with_progid(OLD_BOOKMARK_EXTENSION, OLD_BOOKMARK_PROGID);
     Ok(())
 }
@@ -268,6 +279,9 @@ pub fn unregister() -> Result<()> {
         remove_open_with_progid(ext, IMAGE_PROGID);
     }
     for ext in ARCHIVE_EXTENSIONS {
+        remove_open_with_progid(ext, ARCHIVE_PROGID);
+    }
+    for ext in GENERIC_ARCHIVE_EXTENSIONS {
         remove_open_with_progid(ext, ARCHIVE_PROGID);
     }
     remove_open_with_progid(BOOKMARK_EXTENSION, BOOKMARK_PROGID);
