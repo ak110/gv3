@@ -47,7 +47,7 @@ anyhow = "1"
 thiserror = "2"
 crossbeam-channel = "0.5"
 natord = "1.0"
-zip = { version = "7", default-features = false, features = ["deflate"] }
+zip = { version = "8", default-features = false, features = ["deflate"] }
 unrar = "0.5"
 sevenz-rust = { version = "0.6", features = ["bzip2", "zstd", "aes256"] }
 libloading = "0.8"
