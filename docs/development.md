@@ -70,3 +70,25 @@ for /f %i in ('gh run list --workflow=release.yaml -L1 --json databaseId -q ".[0
 ```
 
 結果の確認: <https://github.com/ak110/gv/actions>
+
+## ドキュメントサイト
+
+ドキュメントは [VitePress](https://vitepress.dev/) で構築し、GitHub Pagesでホストしている。
+
+URL: <https://ak110.github.io/gv/>
+
+### ローカルプレビュー
+
+```cmd
+mise run docs
+```
+
+### デプロイ
+
+`master`ブランチへのpush時に`.github/workflows/docs.yaml`が自動実行する（`docs/`以下または`package.json`の変更時のみ）。
+
+GitHub Pagesの設定はghコマンドで実施済み。変更が必要な場合:
+
+```cmd
+gh api repos/ak110/gv/pages -X PUT -f build_type=workflow
+```

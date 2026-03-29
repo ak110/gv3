@@ -60,6 +60,10 @@ run = [
   "pnpm update --latest",
 ]
 
+[tasks.docs]
+description = "Serve documentation locally (VitePress dev server)"
+run = "pnpm run docs:dev"
+
 [tasks.coverage]
 description = "cargo llvm-cov (coverage report)"
 run = "cargo llvm-cov --html"
