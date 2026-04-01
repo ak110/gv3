@@ -25,7 +25,7 @@ jobs:
     steps:
       - name: Verify CI passed
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
           $maxAttempts = 30
@@ -93,7 +93,7 @@ jobs:
       - name: Update Cargo.lock
         run: cargo generate-lockfile
 
-      - run: mise run build-release
+      - run: mise run build
 
       - name: Create release archive
         shell: pwsh
@@ -118,7 +118,7 @@ jobs:
 
       - name: Create GitHub Release
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "v${{ steps.bump.outputs.version }}" `
             "gv-v${{ steps.bump.outputs.version }}.zip" `

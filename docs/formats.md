@@ -2,7 +2,7 @@
 
 ## 画像（標準対応）
 
-JPEG, PNG, GIF, BMP, WebP
+JPEG、PNG、GIF、BMP、WebP
 
 ## PDF
 

@@ -5,67 +5,53 @@ pnpm = "latest"
 pinact = "latest"
 
 [tasks.setup]
-description = "Initial project setup (install deps + configure git hooks)"
+description = "開発環境のセットアップ"
 run = [
   "rustup component add rustfmt clippy",
   "cargo install cargo-edit cargo-deny",
-  "pnpm self-update",
   "pnpm install",
   "git config core.hooksPath .githooks",
 ]
 
-[tasks.build]
-description = "cargo build"
-run = "cargo build"
+[tasks.setup-ci]
+description = "CI環境のセットアップ (cargo install をスキップ)"
+run = "pnpm install"
 
-[tasks.build-release]
-description = "cargo build --release"
+[tasks.build]
+description = "リリースビルド"
 run = "cargo build --release"
 
-[tasks.run]
-description = "cargo run"
-run = "cargo run -- {{arg(name=\"args\", var=true)}}"
-
 [tasks.clean]
-description = "cargo clean"
+description = "ビルド成果物の削除"
 run = "cargo clean"
 
-[tasks.check]
-description = "cargo check (fast compile check)"
-run = "cargo check"
-
 [tasks.format]
-description = "Auto-fix: fmt + clippy --fix"
+description = "コード整形 + lint (testの軽量版)"
 run = [
   "cargo fmt",
   "cargo clippy --all-targets --fix --allow-dirty --allow-staged -- -D warnings",
+  "pnpm run lint:fix",
 ]
 
 [tasks.test]
-description = "All checks (fmt + clippy + test + deny + doc lint)"
+description = "全チェック (fmt + clippy + test + deny + lint)"
 run = [
   "cargo fmt --check",
   "cargo clippy --all-targets -- -D warnings",
   "cargo test",
   "cargo deny check",
-  "pnpm run textlint",
-  "pnpm run markdownlint",
-  "pnpm run prettier:check",
+  "pnpm run lint",
 ]
 
 [tasks.update]
-description = "Update all dependencies (including major versions)"
+description = "依存パッケージの更新"
 run = [
   "cargo upgrade",
   "cargo update",
   "pnpm update --latest",
-  "GITHUB_TOKEN=$(gh auth token) pinact run --update --min-age 1",
+  "bash -c 'GITHUB_TOKEN=$(gh auth token) pinact run --update --min-age 1'",
 ]
 
 [tasks.docs]
-description = "Serve documentation locally (VitePress dev server)"
+description = "ドキュメントのローカルプレビュー"
 run = "pnpm run docs:dev"
-
-[tasks.coverage]
-description = "cargo llvm-cov (coverage report)"
-run = "cargo llvm-cov --html"

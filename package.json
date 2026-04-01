@@ -6,18 +6,13 @@
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
     "docs:preview": "vitepress preview docs",
-    "textlint": "textlint docs/*.md README.md",
-    "textlint:fix": "textlint --fix docs/*.md README.md",
-    "markdownlint": "markdownlint-cli2 docs/*.md README.md",
-    "markdownlint:fix": "markdownlint-cli2 --fix docs/*.md README.md",
-    "prettier:check": "prettier --check \"**/*.{yml,yaml,json}\"",
-    "prettier:fix": "prettier --write \"**/*.{yml,yaml,json}\""
+    "lint": "textlint docs/*.md README.md && markdownlint-cli2 docs/*.md README.md && prettier --check .",
+    "lint:fix": "textlint --fix docs/*.md README.md && markdownlint-cli2 --fix docs/*.md README.md && prettier --write ."
   },
   "devDependencies": {
     "markdownlint-cli2": "^0.22.0",
     "prettier": "^3.8.1",
     "textlint": "^15.5.2",
-    "textlint-rule-preset-ja-spacing": "^2.4.3",
     "textlint-rule-preset-ja-technical-writing": "^12.0.2",
     "vitepress": "^1.6.4"
   }
