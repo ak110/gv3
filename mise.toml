@@ -15,7 +15,10 @@ run = [
 
 [tasks.setup-ci]
 description = "CI環境のセットアップ (cargo install をスキップ)"
-run = "pnpm install"
+run = [
+  "rustup component add rustfmt clippy",
+  "pnpm install",
+]
 
 [tasks.build]
 description = "リリースビルド"
