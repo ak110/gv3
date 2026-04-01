@@ -40,7 +40,7 @@ impl ZipHandler {
 
         // Storedエントリ: バッファから直接スライス（zip Readerのオーバーヘッド回避）
         if entry.compression() == zip::CompressionMethod::Stored {
-            let start = entry.data_start() as usize;
+            let start = entry.data_start().context("データ開始位置の取得に失敗")? as usize;
             let size = entry.size() as usize;
             drop(entry);
             return Ok(buffer[start..start + size].to_vec());
