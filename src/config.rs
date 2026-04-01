@@ -30,6 +30,7 @@ pub struct Config {
     pub list: ListConfig,
     pub window: WindowConfig,
     pub susie: SusieConfig,
+    pub slideshow: SlideshowConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -78,6 +79,15 @@ pub struct SusieConfig {
     pub image_plugins: Vec<String>,
     /// アーカイブプラグイン優先度
     pub archive_plugins: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(default)]
+pub struct SlideshowConfig {
+    /// スライドショー間隔（ミリ秒）
+    pub interval_ms: u32,
+    /// 最後の画像の後に最初に戻る
+    pub repeat: bool,
 }
 
 // --- カスタムデシリアライザ（フィールド単位フォールバック + stderr警告） ---
@@ -168,6 +178,15 @@ impl Default for SusieConfig {
             plugin_dir: "spi".to_string(),
             image_plugins: Vec::new(),
             archive_plugins: Vec::new(),
+        }
+    }
+}
+
+impl Default for SlideshowConfig {
+    fn default() -> Self {
+        Self {
+            interval_ms: 3000,
+            repeat: true,
         }
     }
 }
@@ -377,6 +396,10 @@ default_sort = "bogus"
         assert_eq!(config.susie.plugin_dir, default.susie.plugin_dir);
         assert_eq!(config.susie.image_plugins, default.susie.image_plugins);
         assert_eq!(config.susie.archive_plugins, default.susie.archive_plugins);
+
+        // slideshow
+        assert_eq!(config.slideshow.interval_ms, default.slideshow.interval_ms);
+        assert_eq!(config.slideshow.repeat, default.slideshow.repeat);
     }
 
     #[test]

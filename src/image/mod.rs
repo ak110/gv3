@@ -1,6 +1,8 @@
+mod exif_reader;
 mod standard;
 pub mod susie;
 
+pub use exif_reader::read_exif_fields;
 pub use standard::StandardDecoder;
 
 /// デコード済み画像データ（RGBAピクセル）
@@ -25,6 +27,8 @@ pub struct ImageMetadata {
     pub height: u32,
     pub format: String,
     pub comments: Vec<String>,
+    /// EXIFメタデータ（キー, フォーマット済み値）
+    pub exif: Vec<(String, String)>,
 }
 
 /// 画像デコーダの共通インターフェース（DecoderChain経由でdyn dispatch）

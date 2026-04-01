@@ -399,10 +399,101 @@ impl Document {
         self.invalidate_cache();
         self.file_list.clear();
 
+        let errors = self.process_and_integrate_containers(paths);
+
+        // エラー処理: 部分成功を許容、全失敗のみエラー返却
+        if self.file_list.len() == 0 {
+            if errors.is_empty() {
+                anyhow::bail!("コンテナ内に画像ファイルがありません");
+            }
+            anyhow::bail!("全てのコンテナの読み込みに失敗:\n{}", errors.join("\n"));
+        }
+        if !errors.is_empty() {
+            let msg = format!("{}件のコンテナを開けませんでした", errors.len());
+            let _ = self.event_sender.send(DocumentEvent::Error(msg));
+        }
+
+        self.file_list.sort_current();
+
+        if self.file_list.len() > 0 {
+            self.file_list.navigate_first();
+        }
+        let _ = self.event_sender.send(DocumentEvent::FileListChanged);
+        self.load_current()
+    }
+
+    /// 複数パス（フォルダ・コンテナ・画像ファイル混在）をフラットに展開して開く
+    pub fn open_multiple(&mut self, paths: &[PathBuf]) -> Result<()> {
+        self.cleanup_archive_temp();
+        self.invalidate_cache();
+        self.file_list.clear();
+
+        // パスを分類しながら処理
+        let mut containers: Vec<PathBuf> = Vec::new();
+        for path in paths {
+            let path = Self::canonicalize(path)?;
+            if path.is_dir() {
+                // フォルダ: 内部を走査し、画像は直接追加、コンテナは収集
+                if let Ok(entries) = std::fs::read_dir(&path) {
+                    for entry in entries.flatten() {
+                        let entry_path = entry.path();
+                        if !entry_path.is_file() {
+                            continue;
+                        }
+                        if self.is_container(&entry_path) {
+                            containers.push(entry_path);
+                        } else if let Some(name) = entry_path.file_name().and_then(|n| n.to_str())
+                            && self.file_list.registry().is_image_extension(name)
+                            && let Ok(info) = crate::file_info::FileInfo::from_path(&entry_path)
+                        {
+                            self.file_list.push(info);
+                        }
+                    }
+                }
+            } else if self.is_container(&path) {
+                containers.push(path);
+            } else if let Some(name) = path.file_name().and_then(|n| n.to_str())
+                && self.file_list.registry().is_image_extension(name)
+                && let Ok(info) = crate::file_info::FileInfo::from_path(&path)
+            {
+                self.file_list.push(info);
+            }
+        }
+
+        // コンテナを展開・統合
+        let errors = self.process_and_integrate_containers(&containers);
+
+        // エラー処理
+        if self.file_list.len() == 0 {
+            if errors.is_empty() {
+                anyhow::bail!("画像ファイルがありません");
+            }
+            anyhow::bail!("読み込みに失敗しました:\n{}", errors.join("\n"));
+        }
+        if !errors.is_empty() {
+            let msg = format!("{}件のコンテナを開けませんでした", errors.len());
+            let _ = self.event_sender.send(DocumentEvent::Error(msg));
+        }
+
+        self.file_list.sort_current();
+
+        if self.file_list.len() > 0 {
+            self.file_list.navigate_first();
+        }
+        let _ = self.event_sender.send(DocumentEvent::FileListChanged);
+        self.load_current()
+    }
+
+    /// コンテナの並列I/O + 結果統合ヘルパー
+    /// file_listとコンテナ状態にエントリを追加し、エラーメッセージのリストを返す
+    fn process_and_integrate_containers(&mut self, paths: &[PathBuf]) -> Vec<String> {
+        if paths.is_empty() {
+            return Vec::new();
+        }
+
         // フェーズ1: 並列I/O（rayon ThreadPool、4スレッド）
         let archive_manager = &self.archive_manager;
         let results: Vec<ContainerResult> = if paths.len() <= 1 {
-            // 単一コンテナは直列処理（スレッドプール生成コスト回避）
             paths
                 .iter()
                 .map(|path| process_single_container(path, archive_manager))
@@ -411,7 +502,7 @@ impl Document {
             let pool = rayon::ThreadPoolBuilder::new()
                 .num_threads(4)
                 .build()
-                .context("スレッドプール作成失敗")?;
+                .expect("スレッドプール作成失敗");
             pool.install(|| {
                 paths
                     .par_iter()
@@ -504,26 +595,7 @@ impl Document {
                 }
             }
         }
-
-        // エラー処理: 部分成功を許容、全失敗のみエラー返却
-        if self.file_list.len() == 0 {
-            if errors.is_empty() {
-                anyhow::bail!("コンテナ内に画像ファイルがありません");
-            }
-            anyhow::bail!("全てのコンテナの読み込みに失敗:\n{}", errors.join("\n"));
-        }
-        if !errors.is_empty() {
-            let msg = format!("{}件のコンテナを開けませんでした", errors.len());
-            let _ = self.event_sender.send(DocumentEvent::Error(msg));
-        }
-
-        self.file_list.sort_current();
-
-        if self.file_list.len() > 0 {
-            self.file_list.navigate_first();
-        }
-        let _ = self.event_sender.send(DocumentEvent::FileListChanged);
-        self.load_current()
+        errors
     }
 
     /// PDFファイルかどうか判定する
@@ -970,6 +1042,7 @@ impl Document {
                     height: img.height,
                     format: "PDF".to_string(),
                     comments: Vec::new(),
+                    exif: Vec::new(),
                 })
             } else {
                 anyhow::bail!("PDFページがまだレンダリングされていません")

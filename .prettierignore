@@ -1,6 +1,8 @@
-target/
 node_modules/
+docs/.vitepress/
+.claude/
+pnpm-lock.yaml
+target/
 *.toml
 *.default.toml
 *.rs
-*.md

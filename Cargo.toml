@@ -1,6 +1,6 @@
 [package]
 name = "gv"
-version = "1.3.1"
+version = "1.4.1"
 edition = "2024"
 rust-version = "1.94"
 description = "Windows用の軽量画像ビューアー"
@@ -42,7 +42,7 @@ windows = { version = "0.62", features = [
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "bmp", "webp"] }
 png = "0.18"
 serde = { version = "1", features = ["derive"] }
-toml = "1.0"
+toml = "1.1"
 anyhow = "1"
 thiserror = "2"
 crossbeam-channel = "0.5"
@@ -54,8 +54,9 @@ libloading = "0.8"
 ureq = "3"
 serde_json = "1"
 rayon = "1"
-fast_image_resize = "5"
+fast_image_resize = "6"
 memmap2 = "0.9"
+kamadak-exif = "0.6"
 
 [build-dependencies]
 winres = "0.1"

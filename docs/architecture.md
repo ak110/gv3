@@ -1,4 +1,10 @@
-# ぐらびゅ アーキテクチャ設計書
+# アーキテクチャ
+
+## 技術スタック
+
+- Rust 2024 edition
+- Win32 API (Direct2D, Shell, WIC)
+- `crossbeam-channel` によるスレッド間通信
 
 ## アーキテクチャパターン: Model-View (MV) 分離
 
@@ -50,14 +56,14 @@ sequenceDiagram
 ## デコーダチェーン
 
 デコーダはDecoderChainに登録された順で`can_decode()`を試行し、最初に対応したデコーダがデコードを担当する。
-登録順:
+登録順は以下の通りです。
 
 1. StandardDecoder (`image` crate) — JPEG/PNG/GIF/BMP/WebP
 2. SusieDecoder (`libloading`) — Susieプラグインからの動的登録
 
 標準デコーダを優先することで、Susieプラグインがなくても主要フォーマットを確実にサポートする。
 
-## 設計上の意図的な制限・選択
+## 設計上の制約・選択
 
 - **GIFは静止画のみ**: アニメーションGIF対応は先読みキャッシュとの整合が複雑になるため意図的に除外
 - **削除操作はごみ箱経由**: ユーザーの誤操作によるデータ喪失を防ぐ安全設計

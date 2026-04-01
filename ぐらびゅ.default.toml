@@ -36,3 +36,9 @@ plugin_dir = "spi"
 image_plugins = []
 # アーカイブプラグイン優先度
 archive_plugins = []
+
+[slideshow]
+# スライドショー間隔（ミリ秒）
+interval_ms = 3000
+# 最後の画像の後に最初に戻る
+repeat = true

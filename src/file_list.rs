@@ -70,6 +70,11 @@ impl FileList {
         }
     }
 
+    /// 拡張子レジストリへの参照を返す
+    pub fn registry(&self) -> &ExtensionRegistry {
+        &self.registry
+    }
+
     /// フォルダ内の画像ファイルを列挙してリストを構築する
     pub fn populate_from_folder(&mut self, folder: &Path) -> Result<()> {
         self.files.clear();

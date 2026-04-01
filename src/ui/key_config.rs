@@ -184,6 +184,11 @@ pub enum Action {
     RegisterShell,
     UnregisterShell,
     Exit,
+
+    // --- スライドショー ---
+    SlideshowToggle,
+    SlideshowFaster,
+    SlideshowSlower,
 }
 
 // --- KeyConfig ---
@@ -350,6 +355,11 @@ impl KeyConfig {
 
         // [list]
         bind(&mut m, "F4", Action::ToggleFileList);
+
+        // [slideshow]
+        bind(&mut m, "Shift+Space", Action::SlideshowToggle);
+        bind(&mut m, "Shift+↑", Action::SlideshowFaster);
+        bind(&mut m, "Shift+↓", Action::SlideshowSlower);
 
         // [utility]
         bind(&mut m, "Shift+M", Action::OpenExeFolder);
@@ -649,6 +659,11 @@ fn field_to_action(field: &str) -> Option<Action> {
         "register_shell" => Action::RegisterShell,
         "unregister_shell" => Action::UnregisterShell,
         "exit" => Action::Exit,
+
+        // スライドショー
+        "slideshow_toggle" => Action::SlideshowToggle,
+        "slideshow_faster" => Action::SlideshowFaster,
+        "slideshow_slower" => Action::SlideshowSlower,
 
         _ => return None,
     })

@@ -51,11 +51,15 @@ impl ImageDecoder for StandardDecoder {
             Vec::new()
         };
 
+        // EXIFメタデータ（JPEG/TIFF/WebP等、フォーマット問わず試行）
+        let exif = super::read_exif_fields(data);
+
         Ok(ImageMetadata {
             width: img.width(),
             height: img.height(),
             format,
             comments,
+            exif,
         })
     }
 }

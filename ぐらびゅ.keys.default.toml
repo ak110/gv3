@@ -106,6 +106,11 @@ mosaic = "Ctrl+M"
 levels = "Ctrl+Shift+L"
 grayscale_simple = "Ctrl+Shift+G"
 
+[slideshow]
+slideshow_toggle = "Shift+Space"
+slideshow_faster = "Shift+↑"
+slideshow_slower = "Shift+↓"
+
 [utility]
 open_exe_folder = "Shift+M"
 open_bookmark_folder = "Shift+B"

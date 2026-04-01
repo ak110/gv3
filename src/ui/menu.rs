@@ -174,6 +174,10 @@ pub fn build_menu_bar() -> HMENU {
             Some((Action::ToggleFullscreen, "全画面表示\tAlt+Enter")),
             Some((Action::ToggleAlwaysOnTop, "常に手前に表示\tT")),
             Some((Action::ToggleCursorHide, "カーソル自動非表示\tNum -")),
+            None,
+            Some((Action::SlideshowToggle, "スライドショー\tShift+Space")),
+            Some((Action::SlideshowFaster, "スライドショー加速\tShift+↑")),
+            Some((Action::SlideshowSlower, "スライドショー減速\tShift+↓")),
         ]);
         append_popup(menu_bar, view_menu, "表示(&V)");
 
@@ -409,4 +413,8 @@ const ALL_ACTIONS: &[Action] = &[
     Action::RegisterShell,
     Action::UnregisterShell,
     Action::Exit,
+    // スライドショー
+    Action::SlideshowToggle,
+    Action::SlideshowFaster,
+    Action::SlideshowSlower,
 ];

@@ -46,6 +46,8 @@ impl ImageDecoder for SusieImageDecoder {
     fn metadata(&self, data: &[u8], filename_hint: &str) -> Result<ImageMetadata> {
         // Susieプラグインにはメタデータ専用APIがないため、デコードして取得
         let image = self.decode(data, filename_hint)?;
+        // EXIFメタデータ（Susie経由でもraw bytesからEXIFを読み取れる）
+        let exif = super::read_exif_fields(data);
         Ok(ImageMetadata {
             width: image.width,
             height: image.height,
@@ -57,6 +59,7 @@ impl ImageDecoder for SusieImageDecoder {
                     .unwrap_or_default()
             ),
             comments: Vec::new(),
+            exif,
         })
     }
 }
