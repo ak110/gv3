@@ -19,18 +19,37 @@ struct SimpleRng(u64);
 
 impl SimpleRng {
     fn new() -> Self {
-        let seed = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(42);
+        let mut buf = [0u8; 8];
+        getrandom::fill(&mut buf).expect("OS乱数ソースの取得に失敗");
+        let seed = u64::from_ne_bytes(buf);
         Self(seed | 1) // 0シード回避
     }
 
-    fn next_usize(&mut self, bound: usize) -> usize {
+    /// xorshift64ステップを実行し、次の状態を返す
+    fn step(&mut self) -> u64 {
         self.0 ^= self.0 << 13;
         self.0 ^= self.0 >> 7;
         self.0 ^= self.0 << 17;
-        (self.0 as usize) % bound
+        self.0
+    }
+
+    /// [0, bound) の範囲で一様分布する乱数を返す（Lemire法）
+    ///
+    /// 参考: Daniel Lemire, "Fast Random Integer Generation in an Interval",
+    /// ACM Trans. Model. Comput. Simul., 2019
+    fn next_usize(&mut self, bound: usize) -> usize {
+        let s = bound as u64;
+        let mut m = self.step() as u128 * s as u128;
+        let mut l = m as u64;
+        if l < s {
+            // rejection threshold: (2^64 - s) % s
+            let t = s.wrapping_neg() % s;
+            while l < t {
+                m = self.step() as u128 * s as u128;
+                l = m as u64;
+            }
+        }
+        (m >> 64) as usize
     }
 }
 
