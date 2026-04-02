@@ -647,7 +647,7 @@ impl FileList {
     }
 
     /// 指定インデックスのファイルエントリを新パスで再構築する（リネーム/移動後の更新用）
-    /// 再ソートして新パスの位置に current_index を追従させる
+    /// リスト内の位置（current_index）はそのまま維持する
     pub fn update_file_at(&mut self, index: usize, new_path: &Path) -> Result<()> {
         let info = self
             .files
@@ -661,11 +661,6 @@ impl FileList {
         info.file_size = new_info.file_size;
         info.modified = new_info.modified;
 
-        // 再ソートして新パスの位置を追跡
-        let new_source = info.source.clone();
-        let new_path_buf = info.path.clone();
-        self.sort(self.sort_order);
-        self.restore_current_position(&new_path_buf, &new_source);
         Ok(())
     }
 }

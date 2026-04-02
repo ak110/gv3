@@ -914,7 +914,7 @@ impl Document {
     }
 
     /// 現在のファイルをリスト内でリネーム（同一フォルダ内の移動後）
-    /// 先読みキャッシュを無効化し、再ソート後の位置に追従する
+    /// 先読みキャッシュを無効化し、リスト内の位置はそのまま維持する
     pub fn rename_current_in_list(&mut self, new_path: &Path) -> Result<()> {
         let index = self
             .file_list
