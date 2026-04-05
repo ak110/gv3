@@ -118,7 +118,7 @@ jobs:
             tag_name = "v$version"
             download_url = "https://github.com/${{ github.repository }}/releases/download/v$version/gv-v$version.zip"
           } | ConvertTo-Json
-          Set-Content -Path "docs/public/version.json" -Value $json -NoNewline
+          Set-Content -Path "docs/public/version.json" -Value $json
 
       - name: Commit, tag and push
         run: |
