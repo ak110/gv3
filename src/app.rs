@@ -195,7 +195,7 @@ impl AppWindow {
         // 先読みエンジン起動
         // 通知コールバック: ワーカースレッドからPostMessageWでUIスレッドを起こす
         let hwnd_raw = hwnd.0 as isize;
-        let notify = Box::new(move || unsafe {
+        let notify: std::sync::Arc<dyn Fn() + Send + Sync> = std::sync::Arc::new(move || unsafe {
             let _ = PostMessageW(
                 Some(HWND(hwnd_raw as *mut _)),
                 WM_DOCUMENT_EVENT,
@@ -272,6 +272,9 @@ impl AppWindow {
         // 先読みレスポンスを処理（キャッシュ格納 + current_image更新）
         self.document.process_prefetch_responses();
 
+        // バックグラウンドコンテナ展開結果を処理
+        self.document.process_expand_results();
+
         while let Ok(event) = self.event_receiver.try_recv() {
             match event {
                 DocumentEvent::ImageReady => unsafe {
@@ -341,7 +344,13 @@ impl AppWindow {
             } else {
                 String::new()
             };
-            format!("{display}{page_info}{sel_info} - ぐらびゅ\0")
+            // バックグラウンド展開の進捗表示
+            let expand_info = if let Some((done, total)) = self.document.expand_progress() {
+                format!(" 読込: {done}/{total}")
+            } else {
+                String::new()
+            };
+            format!("{display}{page_info}{sel_info}{expand_info} - ぐらびゅ\0")
         } else {
             "ぐらびゅ\0".to_string()
         };
@@ -911,8 +920,12 @@ impl AppWindow {
         let source = current.source.clone();
         let path = current.path.clone();
 
-        // PDFページは移動不可
-        if matches!(source, crate::file_info::FileSource::PdfPage { .. }) {
+        // PDFページ・未展開コンテナは移動不可
+        if matches!(
+            source,
+            crate::file_info::FileSource::PdfPage { .. }
+                | crate::file_info::FileSource::PendingContainer { .. }
+        ) {
             return;
         }
 
@@ -969,7 +982,8 @@ impl AppWindow {
                         self.show_error_title(&format!("ファイル書き出し失敗: {e}"));
                     }
                 }
-                crate::file_info::FileSource::PdfPage { .. } => {
+                crate::file_info::FileSource::PdfPage { .. }
+                | crate::file_info::FileSource::PendingContainer { .. } => {
                     unreachable!(); // 上でガード済み
                 }
             }
@@ -1170,6 +1184,9 @@ impl AppWindow {
             let target = match source {
                 crate::file_info::FileSource::ArchiveEntry { archive, .. } => archive.clone(),
                 crate::file_info::FileSource::PdfPage { pdf_path, .. } => pdf_path.clone(),
+                crate::file_info::FileSource::PendingContainer { container_path } => {
+                    container_path.clone()
+                }
                 crate::file_info::FileSource::File(path) => path.clone(),
             };
             let arg = format!("/select,{}", target.display());
@@ -1872,6 +1889,11 @@ impl AppWindow {
 
             // --- ブックマーク ---
             Action::BookmarkSave => {
+                // 未展開コンテナがあれば全て同期展開（ブックマークは完全な状態で保存する）
+                if self.document.file_list().has_pending() {
+                    self.document.expand_all_pending_sync();
+                    self.process_document_events();
+                }
                 let idx = self.document.file_list().current_index();
                 if let Err(e) =
                     crate::bookmark::save_bookmark(self.hwnd, self.document.file_list(), idx)

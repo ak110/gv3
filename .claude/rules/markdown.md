@@ -15,3 +15,4 @@ paths:
     - MD040 - Fenced code blocks should have a language specified
 - 図はMermaid記法で書く
 - 別のMarkdownファイルへのリンクは、基本的に`[プロジェクトルートからのパス](記述個所からの相対パス)`で書く
+  - 例: `docs/api.md` から `docs/guide/setup.md` へリンク → `[docs/guide/setup.md](guide/setup.md)`

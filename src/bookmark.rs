@@ -71,6 +71,9 @@ pub fn save_bookmark(
             } => {
                 let _ = writeln!(content, "pdf\t{}\t{}", pdf_path.display(), page_index);
             }
+            FileSource::PendingContainer { .. } => {
+                // 未展開コンテナはスキップ（保存前にexpand_all_pending_syncで展開済みのはず）
+            }
         }
     }
 

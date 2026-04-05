@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 use anyhow::{Context as _, Result};
-use crossbeam_channel::Sender;
+use crossbeam_channel::{Receiver, Sender};
 use rayon::prelude::*;
 
 use crate::archive::{ArchiveImageEntry, ArchiveManager};
@@ -70,6 +70,29 @@ enum ContainerResult {
         path: PathBuf,
         error: String,
     },
+}
+
+/// コンテナの展開状態
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ContainerState {
+    /// 未展開（プレースホルダとしてリストに存在、バックグラウンドキュー未投入）
+    Pending,
+    /// バックグラウンド展開中
+    InFlight,
+    /// 展開完了
+    Expanded,
+}
+
+/// バックグラウンド展開スレッドからの通知イベント
+enum ContainerExpandEvent {
+    /// 展開成功
+    Expanded {
+        container_path: PathBuf,
+        result: ContainerResult,
+        generation: u64,
+    },
+    /// 全コンテナの展開完了
+    AllDone { generation: u64 },
 }
 
 /// 単一コンテナを処理する（rayon workerから呼ばれる）
@@ -172,6 +195,17 @@ pub struct Document {
     editing_session: Option<EditingSession>,
     /// 永続フィルタ設定
     persistent_filter: PersistentFilter,
+    /// バックグラウンド展開の受信チャネル
+    expand_rx: Option<Receiver<ContainerExpandEvent>>,
+    /// バックグラウンド展開の世代番号（openごとにインクリメント）
+    expand_generation: u64,
+    /// コンテナの展開状態
+    container_states: HashMap<PathBuf, ContainerState>,
+    /// バックグラウンド展開の完了済み結果キャッシュ
+    /// ファイルリストには反映せず、ナビゲーション到達時に使う
+    expand_results: HashMap<PathBuf, ContainerResult>,
+    /// UIスレッド通知コールバック（PostMessageW経由でUIを起こす）
+    ui_notify: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl Document {
@@ -196,6 +230,11 @@ impl Document {
             zip_buffers: Arc::new(RwLock::new(HashMap::new())),
             editing_session: None,
             persistent_filter: PersistentFilter::new(),
+            expand_rx: None,
+            expand_generation: 0,
+            container_states: HashMap::new(),
+            expand_results: HashMap::new(),
+            ui_notify: None,
         }
     }
 
@@ -205,12 +244,14 @@ impl Document {
     /// `base_image_size`: キャッシュ枚数計算の基準となる1枚あたりのバイト数
     pub fn start_prefetch(
         &mut self,
-        notify: Box<dyn Fn() + Send>,
+        notify: Arc<dyn Fn() + Send + Sync>,
         cache_budget: usize,
         base_image_size: usize,
     ) {
+        // UI通知コールバックをバックグラウンド展開用にも保持
+        self.ui_notify = Some(Arc::clone(&notify));
         self.prefetch = Some(PrefetchEngine::new(
-            notify,
+            Box::new(move || notify()),
             Arc::clone(&self.decoder),
             Arc::clone(&self.archive_manager),
             Arc::clone(&self.zip_buffers),
@@ -312,6 +353,10 @@ impl Document {
         }
 
         for idx in indices {
+            // 未展開コンテナは先読み対象外
+            if matches!(files[idx].source, FileSource::PendingContainer { .. }) {
+                continue;
+            }
             if !self.cache.contains(idx) {
                 let pdf_page = match &files[idx].source {
                     FileSource::PdfPage {
@@ -393,11 +438,15 @@ impl Document {
     }
 
     /// 複数コンテナ（アーカイブ/PDF混在）をまとめて開く
-    /// I/Oバウンドな読み込み処理を並列化し、結果を直列で統合する
+    /// 最初のコンテナのみ即座に展開し、残りはプレースホルダとして登録後バックグラウンドで展開する。
     pub fn open_containers(&mut self, paths: &[PathBuf]) -> Result<()> {
         self.cleanup_archive_temp();
         self.invalidate_cache();
         self.file_list.clear();
+        self.container_states.clear();
+        self.expand_results.clear();
+        self.expand_rx = None; // 旧バックグラウンド展開を破棄
+        self.expand_generation += 1;
 
         let errors = self.process_and_integrate_containers(paths);
 
@@ -419,6 +468,10 @@ impl Document {
             self.file_list.navigate_first();
         }
         let _ = self.event_sender.send(DocumentEvent::FileListChanged);
+
+        // 未展開コンテナがあればバックグラウンド展開を起動
+        self.start_background_expansion();
+
         self.load_current()
     }
 
@@ -427,6 +480,10 @@ impl Document {
         self.cleanup_archive_temp();
         self.invalidate_cache();
         self.file_list.clear();
+        self.container_states.clear();
+        self.expand_results.clear();
+        self.expand_rx = None;
+        self.expand_generation += 1;
 
         // パスを分類しながら処理
         let mut containers: Vec<PathBuf> = Vec::new();
@@ -481,121 +538,525 @@ impl Document {
             self.file_list.navigate_first();
         }
         let _ = self.event_sender.send(DocumentEvent::FileListChanged);
+
+        // 未展開コンテナがあればバックグラウンド展開を起動
+        self.start_background_expansion();
+
         self.load_current()
     }
 
-    /// コンテナの並列I/O + 結果統合ヘルパー
-    /// file_listとコンテナ状態にエントリを追加し、エラーメッセージのリストを返す
+    /// コンテナの段階的読み込みヘルパー
+    /// 最初のコンテナのみ即座に展開し、残りはプレースホルダとして登録する。
+    /// エラーメッセージのリストを返す。
     fn process_and_integrate_containers(&mut self, paths: &[PathBuf]) -> Vec<String> {
         if paths.is_empty() {
             return Vec::new();
         }
 
-        // フェーズ1: 並列I/O（rayon ThreadPool、4スレッド）
-        let archive_manager = &self.archive_manager;
-        let results: Vec<ContainerResult> = if paths.len() <= 1 {
-            paths
-                .iter()
-                .map(|path| process_single_container(path, archive_manager))
-                .collect()
-        } else {
-            let pool = rayon::ThreadPoolBuilder::new()
-                .num_threads(4)
-                .build()
-                .expect("スレッドプール作成失敗");
-            pool.install(|| {
-                paths
-                    .par_iter()
-                    .map(|path| process_single_container(path, archive_manager))
-                    .collect()
-            })
-        };
-
-        // フェーズ2: 結果統合（直列）
         let mut errors: Vec<String> = Vec::new();
-        for result in results {
-            match result {
-                ContainerResult::Error { path, error } => {
-                    errors.push(format!("{}: {error}", path.display()));
+
+        // 最初のコンテナだけ即座に展開
+        let result = process_single_container(&paths[0], &self.archive_manager);
+        match result {
+            ContainerResult::Error { path, error } => {
+                errors.push(format!("{}: {error}", path.display()));
+            }
+            result => {
+                self.integrate_container_result(result);
+            }
+        }
+
+        // 残りのコンテナはプレースホルダとして登録
+        for path in &paths[1..] {
+            let file_name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
+            let (file_size, modified) = std::fs::metadata(path)
+                .map(|m| {
+                    (
+                        m.len(),
+                        m.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH),
+                    )
+                })
+                .unwrap_or((0, std::time::SystemTime::UNIX_EPOCH));
+            let info = crate::file_info::FileInfo {
+                path: path.clone(),
+                source: FileSource::PendingContainer {
+                    container_path: path.clone(),
+                },
+                file_name,
+                file_size,
+                modified,
+                marked: false,
+                load_failed: false,
+            };
+            self.file_list.push(info);
+            self.container_states
+                .insert(path.clone(), ContainerState::Pending);
+            self.current_containers.push(path.clone());
+        }
+
+        errors
+    }
+
+    /// ContainerResult をファイルリストに統合する
+    fn integrate_container_result(&mut self, result: ContainerResult) {
+        match result {
+            ContainerResult::Error { .. } => {} // 呼び出し元で処理済み
+            ContainerResult::Pdf { path, page_count } => {
+                if page_count == 0 {
+                    return;
                 }
-                ContainerResult::Pdf { path, page_count } => {
-                    if page_count == 0 {
-                        continue;
-                    }
-                    let pdf_file_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-                    for i in 0..page_count {
-                        let info = crate::file_info::FileInfo {
-                            path: path.clone(),
-                            source: FileSource::PdfPage {
-                                pdf_path: path.clone(),
-                                page_index: i,
-                            },
-                            file_name: format!("Page {:03}", i + 1),
-                            file_size: pdf_file_size,
-                            modified: std::time::SystemTime::now(),
-                            marked: false,
-                            load_failed: false,
+                let pdf_file_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                for i in 0..page_count {
+                    let info = crate::file_info::FileInfo {
+                        path: path.clone(),
+                        source: FileSource::PdfPage {
+                            pdf_path: path.clone(),
+                            page_index: i,
+                        },
+                        file_name: format!("Page {:03}", i + 1),
+                        file_size: pdf_file_size,
+                        modified: std::time::SystemTime::now(),
+                        marked: false,
+                        load_failed: false,
+                    };
+                    self.file_list.push(info);
+                }
+                self.container_states
+                    .insert(path.clone(), ContainerState::Expanded);
+                self.current_containers.push(path);
+            }
+            ContainerResult::Zip {
+                path,
+                buffer,
+                entries,
+            } => {
+                if entries.is_empty() {
+                    return;
+                }
+                for entry in &entries {
+                    let info = crate::file_info::FileInfo {
+                        path: path.clone(),
+                        source: FileSource::ArchiveEntry {
+                            archive: path.clone(),
+                            entry: entry.entry_name.clone(),
+                            on_demand: true,
+                        },
+                        file_name: entry.file_name.clone(),
+                        file_size: entry.file_size,
+                        modified: std::time::SystemTime::now(),
+                        marked: false,
+                        load_failed: false,
+                    };
+                    self.file_list.push(info);
+                }
+                self.zip_buffers
+                    .write()
+                    .expect("zip_buffers lock poisoned")
+                    .insert(path.clone(), buffer);
+                self.container_states
+                    .insert(path.clone(), ContainerState::Expanded);
+                self.current_containers.push(path);
+            }
+            ContainerResult::TempExtracted {
+                path,
+                temp_dir,
+                entries,
+            } => {
+                if entries.is_empty() {
+                    return;
+                }
+                self.archive_temp_dirs.push(temp_dir);
+                self.container_states
+                    .insert(path.clone(), ContainerState::Expanded);
+                self.current_containers.push(path.clone());
+                for (temp_path, entry_name) in &entries {
+                    if let Ok(mut info) = crate::file_info::FileInfo::from_path(temp_path) {
+                        info.source = FileSource::ArchiveEntry {
+                            archive: path.clone(),
+                            entry: entry_name.clone(),
+                            on_demand: false,
                         };
+                        info.file_name = crate::archive::extract_filename(entry_name).to_string();
                         self.file_list.push(info);
-                    }
-                    self.current_containers.push(path);
-                }
-                ContainerResult::Zip {
-                    path,
-                    buffer,
-                    entries,
-                } => {
-                    if entries.is_empty() {
-                        continue;
-                    }
-                    for entry in &entries {
-                        let info = crate::file_info::FileInfo {
-                            path: path.clone(),
-                            source: FileSource::ArchiveEntry {
-                                archive: path.clone(),
-                                entry: entry.entry_name.clone(),
-                                on_demand: true,
-                            },
-                            file_name: entry.file_name.clone(),
-                            file_size: entry.file_size,
-                            modified: std::time::SystemTime::now(),
-                            marked: false,
-                            load_failed: false,
-                        };
-                        self.file_list.push(info);
-                    }
-                    self.zip_buffers
-                        .write()
-                        .expect("zip_buffers lock poisoned")
-                        .insert(path.clone(), buffer);
-                    self.current_containers.push(path);
-                }
-                ContainerResult::TempExtracted {
-                    path,
-                    temp_dir,
-                    entries,
-                } => {
-                    if entries.is_empty() {
-                        continue;
-                    }
-                    self.archive_temp_dirs.push(temp_dir);
-                    self.current_containers.push(path.clone());
-                    for (temp_path, entry_name) in &entries {
-                        if let Ok(mut info) = crate::file_info::FileInfo::from_path(temp_path) {
-                            info.source = FileSource::ArchiveEntry {
-                                archive: path.clone(),
-                                entry: entry_name.clone(),
-                                on_demand: false,
-                            };
-                            info.file_name =
-                                crate::archive::extract_filename(entry_name).to_string();
-                            self.file_list.push(info);
-                        }
                     }
                 }
             }
         }
-        errors
+    }
+
+    /// ContainerResult からエントリのVecを生成する（展開結果の置換用）
+    fn entries_from_container_result(result: &ContainerResult) -> Vec<crate::file_info::FileInfo> {
+        let mut entries = Vec::new();
+        match result {
+            ContainerResult::Error { .. } => {}
+            ContainerResult::Pdf { path, page_count } => {
+                let pdf_file_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+                for i in 0..*page_count {
+                    entries.push(crate::file_info::FileInfo {
+                        path: path.clone(),
+                        source: FileSource::PdfPage {
+                            pdf_path: path.clone(),
+                            page_index: i,
+                        },
+                        file_name: format!("Page {:03}", i + 1),
+                        file_size: pdf_file_size,
+                        modified: std::time::SystemTime::now(),
+                        marked: false,
+                        load_failed: false,
+                    });
+                }
+            }
+            ContainerResult::Zip {
+                path,
+                entries: archive_entries,
+                ..
+            } => {
+                for entry in archive_entries {
+                    entries.push(crate::file_info::FileInfo {
+                        path: path.clone(),
+                        source: FileSource::ArchiveEntry {
+                            archive: path.clone(),
+                            entry: entry.entry_name.clone(),
+                            on_demand: true,
+                        },
+                        file_name: entry.file_name.clone(),
+                        file_size: entry.file_size,
+                        modified: std::time::SystemTime::now(),
+                        marked: false,
+                        load_failed: false,
+                    });
+                }
+            }
+            ContainerResult::TempExtracted {
+                path,
+                entries: temp_entries,
+                ..
+            } => {
+                for (temp_path, entry_name) in temp_entries {
+                    if let Ok(mut info) = crate::file_info::FileInfo::from_path(temp_path) {
+                        info.source = FileSource::ArchiveEntry {
+                            archive: path.clone(),
+                            entry: entry_name.clone(),
+                            on_demand: false,
+                        };
+                        info.file_name = crate::archive::extract_filename(entry_name).to_string();
+                        entries.push(info);
+                    }
+                }
+            }
+        }
+        entries
+    }
+
+    /// バックグラウンドコンテナ展開を起動する
+    /// Pending状態のコンテナを全てInFlightに遷移させてからスレッドに投入する。
+    fn start_background_expansion(&mut self) {
+        // Pending状態のコンテナパスを収集し、現在位置からの距離でソート
+        let current_idx = self.file_list.current_index().unwrap_or(0);
+        let mut pending_paths: Vec<(usize, PathBuf)> = Vec::new();
+        for (i, file) in self.file_list.files().iter().enumerate() {
+            if let FileSource::PendingContainer { container_path } = &file.source {
+                pending_paths.push((i, container_path.clone()));
+            }
+        }
+
+        if pending_paths.is_empty() {
+            return;
+        }
+
+        // 現在位置からの距離でソート（近い順に展開する）
+        pending_paths.sort_by_key(|(idx, _)| (*idx as isize - current_idx as isize).unsigned_abs());
+
+        let paths: Vec<PathBuf> = pending_paths.into_iter().map(|(_, p)| p).collect();
+
+        // ディスパッチ前にメインスレッドで全てInFlightに遷移
+        for path in &paths {
+            self.container_states
+                .insert(path.clone(), ContainerState::InFlight);
+        }
+
+        let (tx, rx) = crossbeam_channel::unbounded();
+        self.expand_rx = Some(rx);
+
+        let generation = self.expand_generation;
+        let archive_manager = Arc::clone(&self.archive_manager);
+        let ui_notify = self.ui_notify.clone();
+
+        std::thread::spawn(move || {
+            // rayon プールで並列展開
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(4)
+                .build()
+                .expect("スレッドプール作成失敗");
+
+            pool.install(|| {
+                paths.par_iter().for_each(|path| {
+                    let result = process_single_container(path, &archive_manager);
+                    let _ = tx.send(ContainerExpandEvent::Expanded {
+                        container_path: path.clone(),
+                        result,
+                        generation,
+                    });
+                    // UIスレッドを起こす（PostMessageW経由）
+                    if let Some(notify) = &ui_notify {
+                        notify();
+                    }
+                });
+            });
+
+            let _ = tx.send(ContainerExpandEvent::AllDone { generation });
+            if let Some(notify) = &ui_notify {
+                notify();
+            }
+        });
+    }
+
+    /// バックグラウンド展開結果をキャッシュに回収する
+    /// ファイルリストは変更しない（ナビゲーション到達時に展開する）。
+    /// タイトルバー更新のために展開済み件数の変化を通知する。
+    pub fn process_expand_results(&mut self) {
+        let current_gen = self.expand_generation;
+        let mut count_changed = false;
+
+        // チャネルの全結果を回収（ファイルリストに触らないので一括処理で問題ない）
+        loop {
+            let Some(rx) = &self.expand_rx else {
+                break;
+            };
+            let Ok(event) = rx.try_recv() else {
+                break;
+            };
+
+            match event {
+                ContainerExpandEvent::Expanded {
+                    container_path,
+                    result,
+                    generation,
+                } => {
+                    if generation != current_gen {
+                        // 古い世代の結果は破棄
+                        if let ContainerResult::TempExtracted { temp_dir, .. } = &result {
+                            let _ = std::fs::remove_dir_all(temp_dir);
+                        }
+                        continue;
+                    }
+
+                    // 結果をキャッシュに蓄積（エラーも含む）
+                    self.container_states
+                        .insert(container_path.clone(), ContainerState::Expanded);
+                    self.expand_results.insert(container_path, result);
+                    count_changed = true;
+                }
+                ContainerExpandEvent::AllDone { generation } => {
+                    if generation == current_gen {
+                        self.expand_rx = None;
+                    }
+                    break;
+                }
+            }
+        }
+
+        // タイトルバーの展開進捗表示を更新（ファイルリストパネルの再構築は不要）
+        if count_changed {
+            self.send_navigation_changed();
+        }
+    }
+
+    /// バックグラウンド展開の進捗を返す（展開済み / 全体）
+    pub fn expand_progress(&self) -> Option<(usize, usize)> {
+        let total = self.container_states.len();
+        if total == 0 {
+            return None;
+        }
+        let done = self
+            .container_states
+            .values()
+            .filter(|s| **s == ContainerState::Expanded)
+            .count();
+        if done >= total {
+            None // 全完了なら非表示
+        } else {
+            Some((done, total))
+        }
+    }
+
+    /// 未展開コンテナを展開してファイルリストに反映する（ナビゲーション到達時用）
+    /// バックグラウンド展開済みの結果があればそれを使い（I/O不要で高速）、
+    /// なければ同期I/Oで展開する。
+    fn expand_container_sync(&mut self, index: usize, container_path: &Path) -> Result<()> {
+        // 1. キャッシュ済み結果があれば使う（バックグラウンド展開完了済み）
+        if let Some(result) = self.expand_results.remove(container_path) {
+            return self.apply_container_result(index, container_path, result);
+        }
+
+        // 2. InFlight状態: バックグラウンド完了をブロッキング待ち
+        let state = self.container_states.get(container_path).copied();
+        if matches!(state, Some(ContainerState::InFlight)) {
+            self.wait_for_container_expansion(container_path);
+            // 待ち完了後、結果がキャッシュにあるはず
+            if let Some(result) = self.expand_results.remove(container_path) {
+                return self.apply_container_result(index, container_path, result);
+            }
+        }
+
+        // 3. Pending or 未知: 同期I/Oで展開
+        self.container_states
+            .insert(container_path.to_path_buf(), ContainerState::InFlight);
+        let result = process_single_container(container_path, &self.archive_manager);
+        self.apply_container_result(index, container_path, result)
+    }
+
+    /// ContainerResult をファイルリストに反映する
+    fn apply_container_result(
+        &mut self,
+        index: usize,
+        container_path: &Path,
+        result: ContainerResult,
+    ) -> Result<()> {
+        match result {
+            ContainerResult::Error {
+                ref path,
+                ref error,
+            } => {
+                let msg = format!("{}: {error}", path.display());
+                self.file_list.remove_at(index);
+                self.container_states
+                    .insert(container_path.to_path_buf(), ContainerState::Expanded);
+                let _ = self.event_sender.send(DocumentEvent::Error(msg.clone()));
+                anyhow::bail!("コンテナ展開失敗: {msg}");
+            }
+            result => {
+                let entries = Self::entries_from_container_result(&result);
+
+                // ZIPバッファやtemp_dirを保存
+                if let ContainerResult::Zip { path, buffer, .. } = result {
+                    self.zip_buffers
+                        .write()
+                        .expect("zip_buffers lock poisoned")
+                        .insert(path, buffer);
+                } else if let ContainerResult::TempExtracted { temp_dir, .. } = result {
+                    self.archive_temp_dirs.push(temp_dir);
+                }
+
+                self.file_list.expand_container_at(index, entries);
+                self.container_states
+                    .insert(container_path.to_path_buf(), ContainerState::Expanded);
+
+                // キャッシュと先読みをリセット
+                self.invalidate_cache();
+                self.schedule_prefetch();
+                let _ = self.event_sender.send(DocumentEvent::FileListChanged);
+                Ok(())
+            }
+        }
+    }
+
+    /// バックグラウンド展開中のコンテナの完了をブロッキングで待つ
+    /// 結果は expand_results キャッシュに蓄積する（ファイルリストは変更しない）
+    fn wait_for_container_expansion(&mut self, target_path: &Path) {
+        let current_gen = self.expand_generation;
+
+        loop {
+            let Some(rx) = &self.expand_rx else {
+                return;
+            };
+            let Ok(event) = rx.recv() else {
+                return; // チャネル切断
+            };
+            match event {
+                ContainerExpandEvent::Expanded {
+                    container_path,
+                    result,
+                    generation,
+                } => {
+                    if generation != current_gen {
+                        if let ContainerResult::TempExtracted { temp_dir, .. } = &result {
+                            let _ = std::fs::remove_dir_all(temp_dir);
+                        }
+                        continue;
+                    }
+
+                    let is_target = container_path == target_path;
+                    self.container_states
+                        .insert(container_path.clone(), ContainerState::Expanded);
+                    self.expand_results.insert(container_path, result);
+
+                    if is_target {
+                        return;
+                    }
+                }
+                ContainerExpandEvent::AllDone { generation } => {
+                    if generation == current_gen {
+                        self.expand_rx = None;
+                    }
+                    return;
+                }
+            }
+        }
+    }
+
+    /// 全未展開コンテナを同期展開する（ブックマーク保存前用）
+    pub fn expand_all_pending_sync(&mut self) {
+        // バックグラウンド展開の完了を全て待つ
+        self.drain_all_expand_results();
+
+        // 全プレースホルダを順に展開
+        while self.file_list.has_pending() {
+            let pending = self
+                .file_list
+                .files()
+                .iter()
+                .enumerate()
+                .find(|(_, f)| f.source.is_pending_container());
+            let Some((idx, file)) = pending else { break };
+            let container_path = match &file.source {
+                FileSource::PendingContainer { container_path } => container_path.clone(),
+                _ => break,
+            };
+            let _ = self.expand_container_sync(idx, &container_path);
+        }
+
+        self.invalidate_cache();
+        self.schedule_prefetch();
+        let _ = self.event_sender.send(DocumentEvent::FileListChanged);
+    }
+
+    /// バックグラウンド展開チャネルの全結果をブロッキングで回収する
+    fn drain_all_expand_results(&mut self) {
+        let current_gen = self.expand_generation;
+        while let Some(rx) = &self.expand_rx {
+            let Ok(event) = rx.recv() else {
+                self.expand_rx = None;
+                break;
+            };
+            match event {
+                ContainerExpandEvent::Expanded {
+                    container_path,
+                    result,
+                    generation,
+                } => {
+                    if generation != current_gen {
+                        if let ContainerResult::TempExtracted { temp_dir, .. } = &result {
+                            let _ = std::fs::remove_dir_all(temp_dir);
+                        }
+                        continue;
+                    }
+                    self.container_states
+                        .insert(container_path.clone(), ContainerState::Expanded);
+                    self.expand_results.insert(container_path, result);
+                }
+                ContainerExpandEvent::AllDone { generation } => {
+                    if generation == current_gen {
+                        self.expand_rx = None;
+                    }
+                    break;
+                }
+            }
+        }
     }
 
     /// PDFファイルかどうか判定する
@@ -667,6 +1128,14 @@ impl Document {
             self.current_image = None;
             return Ok(());
         };
+
+        // 0. 未展開コンテナの場合は同期展開してリトライ
+        if self.file_list.is_pending_at(index)
+            && let Some(container_path) = self.file_list.pending_container_path_at(index)
+        {
+            self.expand_container_sync(index, &container_path)?;
+            return self.load_current();
+        }
 
         // 1. キャッシュヒット → 瞬時切替（永続フィルタはキャッシュ時に既に適用済み）
         if let Some(image) = self.cache.take(index) {
@@ -763,6 +1232,9 @@ impl Document {
                     drop(buffers);
                     self.archive_manager.read_entry(archive, entry)
                 }
+            }
+            FileSource::PendingContainer { .. } => {
+                anyhow::bail!("未展開コンテナからは読み出せません")
             }
             _ => std::fs::read(&info.path)
                 .with_context(|| format!("ファイル読み込み失敗: {}", info.path.display())),
@@ -962,7 +1434,9 @@ impl Document {
         let has_containers = data.entries.iter().any(|s| {
             matches!(
                 s,
-                FileSource::PdfPage { .. } | FileSource::ArchiveEntry { .. }
+                FileSource::PdfPage { .. }
+                    | FileSource::ArchiveEntry { .. }
+                    | FileSource::PendingContainer { .. }
             )
         });
 
@@ -973,6 +1447,7 @@ impl Document {
                 let path = match source {
                     FileSource::PdfPage { pdf_path, .. } => Some(pdf_path),
                     FileSource::ArchiveEntry { archive, .. } => Some(archive),
+                    FileSource::PendingContainer { container_path } => Some(container_path),
                     FileSource::File(_) => None,
                 };
                 if let Some(p) = path
@@ -1379,10 +1854,14 @@ mod tests {
         let (mut doc, _rx) = test_document();
         doc.open_containers(&zip_paths).unwrap();
 
-        // 3 ZIP × 2画像 = 6エントリ
-        assert_eq!(doc.file_list().len(), 6);
+        // 最初のZIPは即展開(2エントリ) + 残り2つはプレースホルダ(2エントリ)
+        assert_eq!(doc.file_list().len(), 4);
         assert_eq!(doc.file_list().current_index(), Some(0));
         assert!(doc.current_image().is_some());
+
+        // 全コンテナを展開すると 3 ZIP × 2画像 = 6エントリ
+        doc.expand_all_pending_sync();
+        assert_eq!(doc.file_list().len(), 6);
 
         cleanup_test_dir(&dir);
     }
@@ -1401,7 +1880,11 @@ mod tests {
         let (mut doc, rx) = test_document();
         doc.open_containers(&[valid_zip, bad_path]).unwrap();
 
-        // 有効なZIPの2エントリだけ読み込まれる
+        // 有効なZIPは即展開(2エントリ)、存在しないZIPはプレースホルダ(1エントリ)
+        assert_eq!(doc.file_list().len(), 3);
+
+        // 全展開すると存在しないZIPのプレースホルダは削除される
+        doc.expand_all_pending_sync();
         assert_eq!(doc.file_list().len(), 2);
 
         // エラー通知が送信される

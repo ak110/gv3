@@ -19,6 +19,8 @@ pub enum FileSource {
     },
     /// PDFのページ
     PdfPage { pdf_path: PathBuf, page_index: u32 },
+    /// 未展開コンテナ（遅延読み込み用プレースホルダ）
+    PendingContainer { container_path: PathBuf },
 }
 
 impl FileSource {
@@ -35,6 +37,9 @@ impl FileSource {
             } => {
                 format!("{}/Page {}", pdf_path.display(), page_index + 1)
             }
+            FileSource::PendingContainer { container_path } => {
+                format!("{} (未展開)", container_path.display())
+            }
         }
     }
 
@@ -43,8 +48,15 @@ impl FileSource {
     pub fn is_contained(&self) -> bool {
         matches!(
             self,
-            FileSource::ArchiveEntry { .. } | FileSource::PdfPage { .. }
+            FileSource::ArchiveEntry { .. }
+                | FileSource::PdfPage { .. }
+                | FileSource::PendingContainer { .. }
         )
+    }
+
+    /// 未展開コンテナかどうか
+    pub fn is_pending_container(&self) -> bool {
+        matches!(self, FileSource::PendingContainer { .. })
     }
 
     /// ダイアログ初期ディレクトリ用: ソースの親ディレクトリを返す
@@ -53,6 +65,7 @@ impl FileSource {
             FileSource::File(path) => path.parent(),
             FileSource::ArchiveEntry { archive, .. } => archive.parent(),
             FileSource::PdfPage { pdf_path, .. } => pdf_path.parent(),
+            FileSource::PendingContainer { container_path } => container_path.parent(),
         }
     }
 
@@ -85,6 +98,11 @@ impl FileSource {
                     .unwrap_or("pdf");
                 format!("{stem}_page{}.png", page_index + 1)
             }
+            FileSource::PendingContainer { container_path } => container_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("container")
+                .to_string(),
         }
     }
 
@@ -149,6 +167,7 @@ impl FileSource {
         match self {
             FileSource::ArchiveEntry { archive, .. } => Some(archive),
             FileSource::PdfPage { pdf_path, .. } => Some(pdf_path),
+            FileSource::PendingContainer { container_path } => Some(container_path),
             FileSource::File(_) => None,
         }
     }

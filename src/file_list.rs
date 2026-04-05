@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -154,6 +154,10 @@ impl FileList {
                     page_index: i2,
                 },
             ) => p1 == p2 && i1 == i2,
+            (
+                FileSource::PendingContainer { container_path: c1 },
+                FileSource::PendingContainer { container_path: c2 },
+            ) => c1 == c2,
             _ => false,
         }
     }
@@ -291,6 +295,64 @@ impl FileList {
     pub fn clear(&mut self) {
         self.files.clear();
         self.current_index = None;
+    }
+
+    /// 指定インデックスが未展開コンテナかどうか
+    pub fn is_pending_at(&self, index: usize) -> bool {
+        self.files
+            .get(index)
+            .is_some_and(|f| f.source.is_pending_container())
+    }
+
+    /// 未展開コンテナが残っているかどうか
+    pub fn has_pending(&self) -> bool {
+        self.files.iter().any(|f| f.source.is_pending_container())
+    }
+
+    /// 指定インデックスの未展開コンテナパスを返す
+    pub fn pending_container_path_at(&self, index: usize) -> Option<PathBuf> {
+        self.files.get(index).and_then(|f| match &f.source {
+            FileSource::PendingContainer { container_path } => Some(container_path.clone()),
+            _ => None,
+        })
+    }
+
+    /// 未展開コンテナのプレースホルダを展開結果で置換する
+    /// 挿入前にグループ内ソートを適用する。
+    /// current_indexを適切に調整する。
+    pub fn expand_container_at(&mut self, index: usize, mut entries: Vec<FileInfo>) {
+        if index >= self.files.len() {
+            return;
+        }
+
+        // 挿入前にグループ内ソートを適用
+        let order = self.sort_order;
+        entries.sort_by(|a, b| Self::compare_by_sort_order(a, b, order));
+
+        let entries_len = entries.len();
+
+        // プレースホルダを削除して展開結果を挿入
+        self.files.splice(index..=index, entries);
+
+        // current_indexの調整
+        if let Some(current) = self.current_index {
+            if entries_len == 0 {
+                // エントリ無し（空コンテナ）: remove_at相当の調整
+                if self.files.is_empty() {
+                    self.current_index = None;
+                } else if index < current {
+                    self.current_index = Some(current - 1);
+                } else if index == current {
+                    self.current_index = Some(current.min(self.files.len() - 1));
+                }
+            } else if index < current {
+                // 展開位置が現在位置より前: entries_len - 1 分だけシフト
+                self.current_index = Some(current + entries_len - 1);
+            } else if index == current {
+                // 展開位置が現在位置: 展開グループの先頭を指す
+                // （current_indexはそのまま = 展開結果の先頭）
+            }
+        }
     }
 
     /// 操作前後で現在位置を維持するヘルパー
@@ -533,6 +595,9 @@ impl FileList {
         match &info.source {
             FileSource::ArchiveEntry { archive, .. } => GroupKey::Archive(archive.clone()),
             FileSource::PdfPage { pdf_path, .. } => GroupKey::Archive(pdf_path.clone()),
+            FileSource::PendingContainer { container_path } => {
+                GroupKey::Archive(container_path.clone())
+            }
             FileSource::File(_) => GroupKey::Folder(
                 info.path
                     .parent()
