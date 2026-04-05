@@ -623,7 +623,17 @@ impl FileList {
         }
 
         if group_start == 0 {
-            return false;
+            // 最後のグループの先頭へラップアラウンド
+            let last_key = Self::group_key(self.files.last().unwrap());
+            if last_key == current_key {
+                return false; // グループが1つだけ
+            }
+            let mut target = self.files.len() - 1;
+            while target > 0 && Self::group_key(&self.files[target - 1]) == last_key {
+                target -= 1;
+            }
+            self.current_index = Some(target);
+            return true;
         }
 
         // 前のグループの先頭へ
@@ -655,7 +665,13 @@ impl FileList {
         }
 
         if next_start >= self.files.len() {
-            return false;
+            // 先頭グループへラップアラウンド
+            let first_key = Self::group_key(&self.files[0]);
+            if first_key == current_key {
+                return false; // グループが1つだけ
+            }
+            self.current_index = Some(0);
+            return true;
         }
 
         self.current_index = Some(next_start);
@@ -1261,8 +1277,13 @@ mod tests {
         assert!(fl.navigate_next_folder());
         assert_eq!(fl.current_index(), Some(3)); // c1.png（グループCの先頭）
 
-        // グループCの末尾、次のフォルダはない
-        assert!(!fl.navigate_next_folder());
+        // グループCの末尾から次のフォルダへ → 先頭グループAへラップアラウンド
+        assert!(fl.navigate_next_folder());
+        assert_eq!(fl.current_index(), Some(0)); // a1.png（グループAの先頭）
+
+        // グループAから前のフォルダへ → 末尾グループCへラップアラウンド
+        assert!(fl.navigate_prev_folder());
+        assert_eq!(fl.current_index(), Some(3)); // c1.png（グループCの先頭）
 
         // グループCから前のフォルダへ
         assert!(fl.navigate_prev_folder());
@@ -1271,9 +1292,6 @@ mod tests {
         // グループBから前のフォルダへ
         assert!(fl.navigate_prev_folder());
         assert_eq!(fl.current_index(), Some(0)); // a1.png（グループAの先頭）
-
-        // グループAの先頭、前のフォルダはない
-        assert!(!fl.navigate_prev_folder());
     }
 
     #[test]
