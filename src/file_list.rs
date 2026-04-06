@@ -7,6 +7,15 @@ use anyhow::Result;
 use crate::extension_registry::ExtensionRegistry;
 use crate::file_info::{FileInfo, FileSource};
 
+/// ナビゲーションの方向（PendingContainer 展開時の current_index 配置に使う）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NavigationDirection {
+    /// 前進方向（次へ・先頭へ・次のフォルダへ等）。展開後グループの先頭に配置する
+    Forward,
+    /// 後退方向（前へ・末尾へ等）。展開後グループの末尾に配置する
+    Backward,
+}
+
 /// フォルダ/アーカイブ単位ナビゲーション用のグループキー
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum GroupKey {
@@ -320,7 +329,14 @@ impl FileList {
     /// 未展開コンテナのプレースホルダを展開結果で置換する
     /// 挿入前にグループ内ソートを適用する。
     /// current_indexを適切に調整する。
-    pub fn expand_container_at(&mut self, index: usize, mut entries: Vec<FileInfo>) {
+    /// `direction` は「展開位置 == 現在位置」だった場合の current_index 配置に使う:
+    /// `Forward` なら展開後グループの先頭、`Backward` なら末尾に置く。
+    pub fn expand_container_at(
+        &mut self,
+        index: usize,
+        mut entries: Vec<FileInfo>,
+        direction: NavigationDirection,
+    ) {
         if index >= self.files.len() {
             return;
         }
@@ -349,8 +365,11 @@ impl FileList {
                 // 展開位置が現在位置より前: entries_len - 1 分だけシフト
                 self.current_index = Some(current + entries_len - 1);
             } else if index == current {
-                // 展開位置が現在位置: 展開グループの先頭を指す
-                // （current_indexはそのまま = 展開結果の先頭）
+                // 展開位置が現在位置: direction に従い先頭または末尾に配置
+                self.current_index = match direction {
+                    NavigationDirection::Forward => Some(index),
+                    NavigationDirection::Backward => Some(index + entries_len - 1),
+                };
             }
         }
     }
@@ -1370,6 +1389,89 @@ mod tests {
 
         // 移動先がないのでfalse
         assert!(!fl.navigate_relative(1));
+    }
+
+    /// テスト用の PendingContainer FileInfo を作成するヘルパー
+    fn make_pending_container_info(container_path: &str) -> FileInfo {
+        FileInfo {
+            path: std::path::PathBuf::from(container_path),
+            file_name: container_path.to_string(),
+            file_size: 0,
+            modified: std::time::SystemTime::UNIX_EPOCH,
+            marked: false,
+            load_failed: false,
+            source: FileSource::PendingContainer {
+                container_path: std::path::PathBuf::from(container_path),
+            },
+        }
+    }
+
+    #[test]
+    fn expand_container_at_forward_places_current_at_first() {
+        let registry = test_registry();
+        let mut fl = FileList::new(registry);
+        // [a.zip 展開済] [pending.zip] [c.zip 展開済]
+        fl.push(make_archive_file_info("a.zip", "a1.png", "a1.png"));
+        fl.push(make_pending_container_info("pending.zip"));
+        fl.push(make_archive_file_info("c.zip", "c1.png", "c1.png"));
+        fl.navigate_to(1); // PendingContainer 上
+
+        let entries = vec![
+            make_archive_file_info("pending.zip", "p1.png", "p1.png"),
+            make_archive_file_info("pending.zip", "p2.png", "p2.png"),
+            make_archive_file_info("pending.zip", "p3.png", "p3.png"),
+        ];
+        fl.expand_container_at(1, entries, NavigationDirection::Forward);
+
+        assert_eq!(fl.len(), 5);
+        // 展開後グループの先頭 (index=1) を指す
+        assert_eq!(fl.current_index(), Some(1));
+        assert_eq!(fl.current().unwrap().file_name, "p1.png");
+    }
+
+    #[test]
+    fn expand_container_at_backward_places_current_at_last() {
+        let registry = test_registry();
+        let mut fl = FileList::new(registry);
+        fl.push(make_archive_file_info("a.zip", "a1.png", "a1.png"));
+        fl.push(make_pending_container_info("pending.zip"));
+        fl.push(make_archive_file_info("c.zip", "c1.png", "c1.png"));
+        fl.navigate_to(1); // PendingContainer 上
+
+        let entries = vec![
+            make_archive_file_info("pending.zip", "p1.png", "p1.png"),
+            make_archive_file_info("pending.zip", "p2.png", "p2.png"),
+            make_archive_file_info("pending.zip", "p3.png", "p3.png"),
+        ];
+        fl.expand_container_at(1, entries, NavigationDirection::Backward);
+
+        assert_eq!(fl.len(), 5);
+        // 展開後グループの末尾 (index=3) を指す
+        assert_eq!(fl.current_index(), Some(3));
+        assert_eq!(fl.current().unwrap().file_name, "p3.png");
+    }
+
+    #[test]
+    fn expand_container_at_before_current_shifts_index() {
+        let registry = test_registry();
+        let mut fl = FileList::new(registry);
+        fl.push(make_pending_container_info("pending.zip"));
+        fl.push(make_archive_file_info("c.zip", "c1.png", "c1.png"));
+        fl.push(make_archive_file_info("c.zip", "c2.png", "c2.png"));
+        fl.navigate_to(2); // c2.png
+
+        let entries = vec![
+            make_archive_file_info("pending.zip", "p1.png", "p1.png"),
+            make_archive_file_info("pending.zip", "p2.png", "p2.png"),
+            make_archive_file_info("pending.zip", "p3.png", "p3.png"),
+        ];
+        // current_index は 2、展開位置は 0 (current より前)。direction は使われない
+        fl.expand_container_at(0, entries, NavigationDirection::Forward);
+
+        assert_eq!(fl.len(), 5);
+        // current は 3 要素分シフトして 2 + (3-1) = 4
+        assert_eq!(fl.current_index(), Some(4));
+        assert_eq!(fl.current().unwrap().file_name, "c2.png");
     }
 
     #[test]

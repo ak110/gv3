@@ -8,6 +8,7 @@ use crossbeam_channel::Receiver;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::{InvalidateRect, UpdateWindow, ValidateRect};
 use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+use windows::Win32::UI::Controls::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::GetKeyState;
 use windows::Win32::UI::Shell::{DragAcceptFiles, DragFinish, DragQueryFileW, HDROP};
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -275,21 +276,22 @@ impl AppWindow {
         // バックグラウンドコンテナ展開結果を処理
         self.document.process_expand_results();
 
+        // FileListChanged は同一poll内で複数届きうる (バックグラウンド統合バッチごと等)。
+        // パネル更新コストを抑えるため、ループ中はフラグだけ立て、ループ抜け後に1回だけ
+        // panel.update() を呼ぶ。
+        let mut file_list_changed = false;
+        let mut nav_changed_index: Option<usize> = None;
         while let Ok(event) = self.event_receiver.try_recv() {
             match event {
                 DocumentEvent::ImageReady => unsafe {
                     let _ = InvalidateRect(Some(self.hwnd), None, false);
                 },
                 DocumentEvent::NavigationChanged { index, .. } => {
-                    self.update_title();
-                    self.file_list_panel.set_selection(index);
+                    nav_changed_index = Some(index);
                 }
                 DocumentEvent::FileListChanged => {
                     self.stop_slideshow();
-                    let doc = &self.document;
-                    self.file_list_panel
-                        .update(doc.file_list(), |i| doc.is_cached(i));
-                    self.update_title(); // リスト変更（削除等）でタイトルを同期
+                    file_list_changed = true;
                 }
                 DocumentEvent::Error(msg) => {
                     self.show_error_title(&msg);
@@ -297,29 +299,30 @@ impl AppWindow {
             }
         }
 
-        // パネル表示中ならキャッシュ状態の差分のみ更新（全件再構築を避ける）
+        if file_list_changed {
+            let count = self.document.file_list().len();
+            self.file_list_panel.update(count);
+            self.update_title();
+        }
+        if let Some(index) = nav_changed_index {
+            self.update_title();
+            self.file_list_panel.set_selection(index);
+        }
+
+        // パネル表示中ならキャッシュ状態の差分のみ更新（該当行のみ再描画）
         if self.file_list_panel.is_visible() {
             let doc = &self.document;
-            let files = doc.file_list().files();
+            let len = doc.file_list().len();
             // 現在のキャッシュ状態をスナップショット（上限6件程度なので軽量）
             let mut new_cached = HashSet::new();
-            for i in 0..files.len() {
+            for i in 0..len {
                 if doc.is_cached(i) {
                     new_cached.insert(i);
                 }
             }
-            // 前回との差分だけ update_item() で更新
+            // 前回との差分だけ該当行を再描画
             for &i in self.cached_indices.symmetric_difference(&new_cached) {
-                if let Some(info) = files.get(i) {
-                    self.file_list_panel
-                        .update_item(i, info, new_cached.contains(&i));
-                }
-            }
-            // 差分があれば選択位置を復元（LB_DELETESTRING+LB_INSERTSTRINGで崩れるため）
-            if self.cached_indices != new_cached
-                && let Some(idx) = doc.file_list().current_index()
-            {
-                self.file_list_panel.set_selection(idx);
+                self.file_list_panel.update_item(i);
             }
             self.cached_indices = new_cached;
         }
@@ -328,6 +331,12 @@ impl AppWindow {
     /// タイトルバーを更新
     fn update_title(&self) {
         let title = if let Some(source) = self.document.current_source() {
+            // PendingContainer 上にいる場合は「読み込み中」プレフィックスを付ける
+            let loading_prefix = if source.is_pending_container() {
+                "読み込み中: "
+            } else {
+                ""
+            };
             let display = source.display_path();
             let fl = self.document.file_list();
             let page_info = if let Some(idx) = fl.current_index() {
@@ -350,7 +359,7 @@ impl AppWindow {
             } else {
                 String::new()
             };
-            format!("{display}{page_info}{sel_info}{expand_info} - ぐらびゅ\0")
+            format!("{loading_prefix}{display}{page_info}{sel_info}{expand_info} - ぐらびゅ\0")
         } else {
             "ぐらびゅ\0".to_string()
         };
@@ -670,34 +679,6 @@ impl AppWindow {
                     let control_id = (wparam.0 as u32) & 0xFFFF;
                     let control_hwnd = HWND(lparam.0 as *mut _);
 
-                    // ListBox の LBN_SELCHANGE
-                    if notify_code == 1 // LBN_SELCHANGE
-                        && control_hwnd == app.file_list_panel.listbox_hwnd()
-                    {
-                        let sel = unsafe {
-                            SendMessageW(
-                                app.file_list_panel.listbox_hwnd(),
-                                LB_GETCURSEL,
-                                None,
-                                None,
-                            )
-                        };
-                        if sel.0 >= 0 {
-                            if !app.guard_unsaved_edit() {
-                                // キャンセル時は選択位置を復元
-                                if let Some(idx) = app.document.file_list().current_index() {
-                                    app.file_list_panel.set_selection(idx);
-                                }
-                                return LRESULT(0);
-                            }
-                            app.selection.deselect();
-                            app.stop_slideshow();
-                            app.document.navigate_to(sel.0 as usize);
-                            app.process_document_events();
-                        }
-                        return LRESULT(0);
-                    }
-
                     // メニュー項目（notify_code == 0 かつコントロールなし）
                     if notify_code == 0 && control_hwnd.0.is_null() {
                         if let Some(action) = menu::menu_id_to_action(control_id as u16) {
@@ -706,6 +687,13 @@ impl AppWindow {
                         return LRESULT(0);
                     }
 
+                    return LRESULT(0);
+                }
+                WM_NOTIFY => {
+                    let nmhdr = unsafe { &*(lparam.0 as *const NMHDR) };
+                    if nmhdr.hwndFrom == app.file_list_panel.listview_hwnd() {
+                        return app.handle_file_list_notify(nmhdr, lparam);
+                    }
                     return LRESULT(0);
                 }
                 WM_DROPFILES => {
@@ -822,14 +810,8 @@ impl AppWindow {
         self.process_document_events();
         if self.file_list_panel.is_visible()
             && let Some(idx) = mark_idx
-            && let Some(info) = self.document.file_list().files().get(idx)
         {
-            let is_cached = self.document.is_cached(idx);
-            self.file_list_panel.update_item(idx, info, is_cached);
-            // update_itemでselectionが崩れるので復元
-            if let Some(cur) = self.document.file_list().current_index() {
-                self.file_list_panel.set_selection(cur);
-            }
+            self.file_list_panel.update_item(idx);
         }
     }
 
@@ -838,10 +820,7 @@ impl AppWindow {
         if self.file_list_panel.is_visible()
             && let Some(idx) = self.document.file_list().current_index()
         {
-            let info = &self.document.file_list().files()[idx];
-            let is_cached = self.document.is_cached(idx);
-            self.file_list_panel.update_item(idx, info, is_cached);
-            self.file_list_panel.set_selection(idx);
+            self.file_list_panel.update_item(idx);
         }
     }
 
@@ -1590,15 +1569,14 @@ impl AppWindow {
         // パネルが表示状態になったら全同期（非表示中の変更を反映）
         if self.file_list_panel.is_visible() {
             let doc = &self.document;
-            self.file_list_panel
-                .update(doc.file_list(), |i| doc.is_cached(i));
+            let len = doc.file_list().len();
+            self.file_list_panel.update(len);
             if let Some(idx) = doc.file_list().current_index() {
                 self.file_list_panel.set_selection(idx);
             }
             // cached_indicesも同期
             self.cached_indices.clear();
-            let files = self.document.file_list().files();
-            for i in 0..files.len() {
+            for i in 0..len {
                 if self.document.is_cached(i) {
                     self.cached_indices.insert(i);
                 }
@@ -1611,12 +1589,74 @@ impl AppWindow {
         }
     }
 
+    /// ListView (file_list_panel) からの WM_NOTIFY を処理する
+    fn handle_file_list_notify(&mut self, nmhdr: &NMHDR, lparam: LPARAM) -> LRESULT {
+        match nmhdr.code {
+            // テキスト要求: 該当インデックスのラベルを ListView 提供のバッファへコピー
+            i if i == LVN_GETDISPINFOW => {
+                let dispinfo = unsafe { &mut *(lparam.0 as *mut NMLVDISPINFOW) };
+                if (dispinfo.item.mask & LVIF_TEXT).0 != 0 {
+                    let idx = dispinfo.item.iItem as usize;
+                    let files = self.document.file_list().files();
+                    if let Some(info) = files.get(idx) {
+                        let is_cached = self.document.is_cached(idx);
+                        let label = FileListPanel::format_label(info, is_cached);
+                        // UTF-16 化して、ListView 提供の pszText バッファへコピー
+                        let max = dispinfo.item.cchTextMax as usize;
+                        if max > 0 && !dispinfo.item.pszText.0.is_null() {
+                            let mut wide: Vec<u16> = label.encode_utf16().collect();
+                            // ヌル終端1文字分を残して切り詰める
+                            if wide.len() >= max {
+                                wide.truncate(max - 1);
+                            }
+                            wide.push(0);
+                            unsafe {
+                                std::ptr::copy_nonoverlapping(
+                                    wide.as_ptr(),
+                                    dispinfo.item.pszText.0,
+                                    wide.len(),
+                                );
+                            }
+                        }
+                    }
+                }
+                LRESULT(0)
+            }
+            // 選択変更通知: ユーザーのクリック・マウスホイール等で iItem が変わった
+            i if i == LVN_ITEMCHANGED => {
+                let nmlv = unsafe { &*(lparam.0 as *const NMLISTVIEW) };
+                // 状態変化のうち SELECTED ビットが新たに立ったときだけ反応
+                let became_selected = (nmlv.uChanged.0 & LVIF_STATE.0) != 0
+                    && (nmlv.uOldState & LVIS_SELECTED.0) == 0
+                    && (nmlv.uNewState & LVIS_SELECTED.0) != 0;
+                if became_selected && nmlv.iItem >= 0 {
+                    let target = nmlv.iItem as usize;
+                    if self.document.file_list().current_index() != Some(target) {
+                        if !self.guard_unsaved_edit() {
+                            // キャンセル時は選択位置を復元
+                            if let Some(idx) = self.document.file_list().current_index() {
+                                self.file_list_panel.set_selection(idx);
+                            }
+                            return LRESULT(0);
+                        }
+                        self.selection.deselect();
+                        self.stop_slideshow();
+                        self.document.navigate_to(target);
+                        self.process_document_events();
+                    }
+                }
+                LRESULT(0)
+            }
+            _ => LRESULT(0),
+        }
+    }
+
     /// ファイルリストパネルの同期ヘルパー（MarkInvertAll / MarkInvertToHere で共通）
     fn sync_file_list_panel(&mut self) {
         if self.file_list_panel.is_visible() {
             let doc = &self.document;
-            self.file_list_panel
-                .update(doc.file_list(), |i| doc.is_cached(i));
+            let len = doc.file_list().len();
+            self.file_list_panel.update(len);
             if let Some(idx) = doc.file_list().current_index() {
                 self.file_list_panel.set_selection(idx);
             }

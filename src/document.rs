@@ -11,7 +11,7 @@ use crate::archive::{ArchiveImageEntry, ArchiveManager};
 use crate::editing::EditingSession;
 use crate::extension_registry::ExtensionRegistry;
 use crate::file_info::FileSource;
-use crate::file_list::FileList;
+use crate::file_list::{FileList, NavigationDirection};
 use crate::image::{DecodedImage, DecoderChain};
 use crate::persistent_filter::PersistentFilter;
 use crate::prefetch::{LoadResponse, PageCache, PrefetchEngine};
@@ -201,9 +201,12 @@ pub struct Document {
     expand_generation: u64,
     /// コンテナの展開状態
     container_states: HashMap<PathBuf, ContainerState>,
-    /// バックグラウンド展開の完了済み結果キャッシュ
-    /// ファイルリストには反映せず、ナビゲーション到達時に使う
-    expand_results: HashMap<PathBuf, ContainerResult>,
+    /// 直近のナビゲーション操作の方向（PendingContainer 到達時の intent 構築に使う）
+    last_navigation_direction: NavigationDirection,
+    /// 待機中の PendingContainer ナビゲーション意図
+    /// `(container_path, 到達時の方向)` を保持し、バックグラウンド展開完了時に
+    /// direction-aware な current_index 配置に使う
+    pending_navigation_intent: Option<(PathBuf, NavigationDirection)>,
     /// UIスレッド通知コールバック（PostMessageW経由でUIを起こす）
     ui_notify: Option<Arc<dyn Fn() + Send + Sync>>,
 }
@@ -233,7 +236,8 @@ impl Document {
             expand_rx: None,
             expand_generation: 0,
             container_states: HashMap::new(),
-            expand_results: HashMap::new(),
+            last_navigation_direction: NavigationDirection::Forward,
+            pending_navigation_intent: None,
             ui_notify: None,
         }
     }
@@ -444,7 +448,7 @@ impl Document {
         self.invalidate_cache();
         self.file_list.clear();
         self.container_states.clear();
-        self.expand_results.clear();
+        self.pending_navigation_intent = None;
         self.expand_rx = None; // 旧バックグラウンド展開を破棄
         self.expand_generation += 1;
 
@@ -481,7 +485,7 @@ impl Document {
         self.invalidate_cache();
         self.file_list.clear();
         self.container_states.clear();
-        self.expand_results.clear();
+        self.pending_navigation_intent = None;
         self.expand_rx = None;
         self.expand_generation += 1;
 
@@ -754,12 +758,20 @@ impl Document {
 
     /// バックグラウンドコンテナ展開を起動する
     /// Pending状態のコンテナを全てInFlightに遷移させてからスレッドに投入する。
+    /// 既に Expanded 状態のコンテナはスキップする (再起動時の二重展開防止)。
     fn start_background_expansion(&mut self) {
         // Pending状態のコンテナパスを収集し、現在位置からの距離でソート
         let current_idx = self.file_list.current_index().unwrap_or(0);
         let mut pending_paths: Vec<(usize, PathBuf)> = Vec::new();
         for (i, file) in self.file_list.files().iter().enumerate() {
             if let FileSource::PendingContainer { container_path } = &file.source {
+                // 既に Expanded 状態のものは投入しない (reschedule 時の安全策)
+                if matches!(
+                    self.container_states.get(container_path),
+                    Some(ContainerState::Expanded)
+                ) {
+                    continue;
+                }
                 pending_paths.push((i, container_path.clone()));
             }
         }
@@ -815,14 +827,30 @@ impl Document {
         });
     }
 
-    /// バックグラウンド展開結果をキャッシュに回収する
-    /// ファイルリストは変更しない（ナビゲーション到達時に展開する）。
-    /// タイトルバー更新のために展開済み件数の変化を通知する。
+    /// バックグラウンド展開を再起動して優先度を再計算する
+    /// シャッフル等でリスト並べ替えが起きた後や、ユーザーが PendingContainer
+    /// に到達して特定コンテナを最優先で待ち始めたタイミングで呼ぶ。
+    /// 古い rayon ジョブは進行中の最大4タスクを完了させてから終了するが、
+    /// 結果は世代不一致で破棄される。
+    fn reschedule_background_expansion(&mut self) {
+        if !self.file_list.has_pending() {
+            return;
+        }
+        self.expand_rx = None; // 古い結果は世代不一致で破棄
+        self.expand_generation += 1;
+        self.start_background_expansion();
+    }
+
+    /// バックグラウンド展開結果を回収して file_list に統合する
+    /// 1回の poll で受信可能な完了結果を全部処理し、終了時に1回だけ
+    /// `FileListChanged` を送信する (パネル全件再構築のコストを抑えるため)。
+    /// 統合対象が `pending_navigation_intent` と一致したら direction を渡し、
+    /// 解決時に `load_current()` をリトライして表示を更新する。
     pub fn process_expand_results(&mut self) {
         let current_gen = self.expand_generation;
-        let mut count_changed = false;
+        let mut applied = false;
+        let mut intent_resolved = false;
 
-        // チャネルの全結果を回収（ファイルリストに触らないので一括処理で問題ない）
         loop {
             let Some(rx) = &self.expand_rx else {
                 break;
@@ -838,18 +866,33 @@ impl Document {
                     generation,
                 } => {
                     if generation != current_gen {
-                        // 古い世代の結果は破棄
                         if let ContainerResult::TempExtracted { temp_dir, .. } = &result {
                             let _ = std::fs::remove_dir_all(temp_dir);
                         }
                         continue;
                     }
 
-                    // 結果をキャッシュに蓄積（エラーも含む）
-                    self.container_states
-                        .insert(container_path.clone(), ContainerState::Expanded);
-                    self.expand_results.insert(container_path, result);
-                    count_changed = true;
+                    // file_list 内で該当 PendingContainer を探して統合
+                    let Some(idx) = self.find_pending_index(&container_path) else {
+                        // プレースホルダがもう存在しない (リスト変更等) → 結果を捨てる
+                        if let ContainerResult::TempExtracted { temp_dir, .. } = &result {
+                            let _ = std::fs::remove_dir_all(temp_dir);
+                        }
+                        continue;
+                    };
+
+                    // intent と一致するなら direction を引き出し、解決済みフラグを立てる
+                    let (direction, was_intent) = match &self.pending_navigation_intent {
+                        Some((p, d)) if *p == container_path => (*d, true),
+                        _ => (NavigationDirection::Forward, false),
+                    };
+
+                    let _ = self.apply_container_result(idx, &container_path, result, direction);
+                    applied = true;
+                    if was_intent {
+                        self.pending_navigation_intent = None;
+                        intent_resolved = true;
+                    }
                 }
                 ContainerExpandEvent::AllDone { generation } => {
                     if generation == current_gen {
@@ -860,10 +903,24 @@ impl Document {
             }
         }
 
-        // タイトルバーの展開進捗表示を更新（ファイルリストパネルの再構築は不要）
-        if count_changed {
+        if applied {
+            // 待っていたコンテナが解決されたら load_current でリトライして表示を更新
+            if intent_resolved && self.file_list.current_index().is_some() {
+                let _ = self.load_current();
+            }
+            // バッチ終了時に1回だけ FileListChanged を送信
+            // (apply_container_result は内部送信をしないので、ここでまとめて通知)
+            let _ = self.event_sender.send(DocumentEvent::FileListChanged);
             self.send_navigation_changed();
         }
+    }
+
+    /// 指定 container_path を持つ PendingContainer プレースホルダの index を探す
+    fn find_pending_index(&self, container_path: &Path) -> Option<usize> {
+        self.file_list.files().iter().position(|f| match &f.source {
+            FileSource::PendingContainer { container_path: cp } => cp == container_path,
+            _ => false,
+        })
     }
 
     /// バックグラウンド展開の進捗を返す（展開済み / 全体）
@@ -884,38 +941,16 @@ impl Document {
         }
     }
 
-    /// 未展開コンテナを展開してファイルリストに反映する（ナビゲーション到達時用）
-    /// バックグラウンド展開済みの結果があればそれを使い（I/O不要で高速）、
-    /// なければ同期I/Oで展開する。
-    fn expand_container_sync(&mut self, index: usize, container_path: &Path) -> Result<()> {
-        // 1. キャッシュ済み結果があれば使う（バックグラウンド展開完了済み）
-        if let Some(result) = self.expand_results.remove(container_path) {
-            return self.apply_container_result(index, container_path, result);
-        }
-
-        // 2. InFlight状態: バックグラウンド完了をブロッキング待ち
-        let state = self.container_states.get(container_path).copied();
-        if matches!(state, Some(ContainerState::InFlight)) {
-            self.wait_for_container_expansion(container_path);
-            // 待ち完了後、結果がキャッシュにあるはず
-            if let Some(result) = self.expand_results.remove(container_path) {
-                return self.apply_container_result(index, container_path, result);
-            }
-        }
-
-        // 3. Pending or 未知: 同期I/Oで展開
-        self.container_states
-            .insert(container_path.to_path_buf(), ContainerState::InFlight);
-        let result = process_single_container(container_path, &self.archive_manager);
-        self.apply_container_result(index, container_path, result)
-    }
-
     /// ContainerResult をファイルリストに反映する
+    /// `direction` は「展開位置 == 現在位置」だった場合の current_index 配置に使う。
+    /// `FileListChanged` の送信は行わず、呼び出し元 (process_expand_results 等) が
+    /// バッチ完了後にまとめて1回送信する。
     fn apply_container_result(
         &mut self,
         index: usize,
         container_path: &Path,
         result: ContainerResult,
+        direction: NavigationDirection,
     ) -> Result<()> {
         match result {
             ContainerResult::Error {
@@ -942,69 +977,28 @@ impl Document {
                     self.archive_temp_dirs.push(temp_dir);
                 }
 
-                self.file_list.expand_container_at(index, entries);
+                self.file_list
+                    .expand_container_at(index, entries, direction);
                 self.container_states
                     .insert(container_path.to_path_buf(), ContainerState::Expanded);
 
                 // キャッシュと先読みをリセット
                 self.invalidate_cache();
                 self.schedule_prefetch();
-                let _ = self.event_sender.send(DocumentEvent::FileListChanged);
                 Ok(())
             }
         }
     }
 
-    /// バックグラウンド展開中のコンテナの完了をブロッキングで待つ
-    /// 結果は expand_results キャッシュに蓄積する（ファイルリストは変更しない）
-    fn wait_for_container_expansion(&mut self, target_path: &Path) {
-        let current_gen = self.expand_generation;
-
-        loop {
-            let Some(rx) = &self.expand_rx else {
-                return;
-            };
-            let Ok(event) = rx.recv() else {
-                return; // チャネル切断
-            };
-            match event {
-                ContainerExpandEvent::Expanded {
-                    container_path,
-                    result,
-                    generation,
-                } => {
-                    if generation != current_gen {
-                        if let ContainerResult::TempExtracted { temp_dir, .. } = &result {
-                            let _ = std::fs::remove_dir_all(temp_dir);
-                        }
-                        continue;
-                    }
-
-                    let is_target = container_path == target_path;
-                    self.container_states
-                        .insert(container_path.clone(), ContainerState::Expanded);
-                    self.expand_results.insert(container_path, result);
-
-                    if is_target {
-                        return;
-                    }
-                }
-                ContainerExpandEvent::AllDone { generation } => {
-                    if generation == current_gen {
-                        self.expand_rx = None;
-                    }
-                    return;
-                }
-            }
-        }
-    }
-
-    /// 全未展開コンテナを同期展開する（ブックマーク保存前用）
+    /// 全未展開コンテナを同期展開する（ブックマーク保存前等で全展開が必要な経路用）
+    /// バックグラウンド展開と並走する可能性があるため、まず世代を進めて旧結果を破棄してから
+    /// 残った PendingContainer を1つずつ直接同期展開する。
     pub fn expand_all_pending_sync(&mut self) {
-        // バックグラウンド展開の完了を全て待つ
-        self.drain_all_expand_results();
+        // 旧バックグラウンドジョブの結果を破棄（世代不一致で次回 process_expand_results が捨てる）
+        self.expand_rx = None;
+        self.expand_generation += 1;
 
-        // 全プレースホルダを順に展開
+        // 全プレースホルダを順に同期展開
         while self.file_list.has_pending() {
             let pending = self
                 .file_list
@@ -1017,46 +1011,31 @@ impl Document {
                 FileSource::PendingContainer { container_path } => container_path.clone(),
                 _ => break,
             };
-            let _ = self.expand_container_sync(idx, &container_path);
+            // 既に Expanded 状態 (バックグラウンドが直前に書き戻したケース) はスキップして
+            // ファイルリストから単に取り除くだけにする
+            if matches!(
+                self.container_states.get(&container_path),
+                Some(ContainerState::Expanded)
+            ) {
+                self.file_list.remove_at(idx);
+                continue;
+            }
+            self.container_states
+                .insert(container_path.clone(), ContainerState::InFlight);
+            let result = process_single_container(&container_path, &self.archive_manager);
+            // expand_all_pending_sync は通常ナビゲーション前のバックエンド処理なので
+            // 方向は意味を持たない。Forward を渡しておく。
+            let _ = self.apply_container_result(
+                idx,
+                &container_path,
+                result,
+                NavigationDirection::Forward,
+            );
         }
 
         self.invalidate_cache();
         self.schedule_prefetch();
         let _ = self.event_sender.send(DocumentEvent::FileListChanged);
-    }
-
-    /// バックグラウンド展開チャネルの全結果をブロッキングで回収する
-    fn drain_all_expand_results(&mut self) {
-        let current_gen = self.expand_generation;
-        while let Some(rx) = &self.expand_rx {
-            let Ok(event) = rx.recv() else {
-                self.expand_rx = None;
-                break;
-            };
-            match event {
-                ContainerExpandEvent::Expanded {
-                    container_path,
-                    result,
-                    generation,
-                } => {
-                    if generation != current_gen {
-                        if let ContainerResult::TempExtracted { temp_dir, .. } = &result {
-                            let _ = std::fs::remove_dir_all(temp_dir);
-                        }
-                        continue;
-                    }
-                    self.container_states
-                        .insert(container_path.clone(), ContainerState::Expanded);
-                    self.expand_results.insert(container_path, result);
-                }
-                ContainerExpandEvent::AllDone { generation } => {
-                    if generation == current_gen {
-                        self.expand_rx = None;
-                    }
-                    break;
-                }
-            }
-        }
     }
 
     /// PDFファイルかどうか判定する
@@ -1096,6 +1075,11 @@ impl Document {
 
     /// 相対移動
     pub fn navigate_relative(&mut self, offset: isize) {
+        self.last_navigation_direction = if offset >= 0 {
+            NavigationDirection::Forward
+        } else {
+            NavigationDirection::Backward
+        };
         if self.file_list.navigate_relative(offset) {
             let _ = self.load_current();
         }
@@ -1103,6 +1087,7 @@ impl Document {
 
     /// 最初へ移動
     pub fn navigate_first(&mut self) {
+        self.last_navigation_direction = NavigationDirection::Forward;
         if self.file_list.navigate_first() {
             let _ = self.load_current();
         }
@@ -1110,6 +1095,7 @@ impl Document {
 
     /// 指定インデックスへ移動
     pub fn navigate_to(&mut self, index: usize) {
+        self.last_navigation_direction = NavigationDirection::Forward;
         if self.file_list.navigate_to(index) {
             let _ = self.load_current();
         }
@@ -1117,6 +1103,7 @@ impl Document {
 
     /// 最後へ移動
     pub fn navigate_last(&mut self) {
+        self.last_navigation_direction = NavigationDirection::Backward;
         if self.file_list.navigate_last() {
             let _ = self.load_current();
         }
@@ -1129,13 +1116,32 @@ impl Document {
             return Ok(());
         };
 
-        // 0. 未展開コンテナの場合は同期展開してリトライ
+        // 0. PendingContainer なら同期展開せず、非同期待ちに入る
+        //    (UIスレッドをブロックしないため。展開完了は process_expand_results が
+        //    file_list へ統合し、direction-aware に current_index を調整した上で
+        //    load_current() をリトライする)
         if self.file_list.is_pending_at(index)
             && let Some(container_path) = self.file_list.pending_container_path_at(index)
         {
-            self.expand_container_sync(index, &container_path)?;
-            return self.load_current();
+            // 「読み込み中」状態に遷移
+            self.current_image = None;
+
+            // 直近の navigation direction を保存し、該当コンテナの展開を最優先化
+            // (start_background_expansion 内で current_index 基準にソートされる)
+            self.pending_navigation_intent = Some((container_path, self.last_navigation_direction));
+            self.reschedule_background_expansion();
+
+            // UI に状態変化を通知:
+            //   - NavigationChanged: タイトルバーとファイルリスト選択を更新
+            //     (update_title 側で「読み込み中: foo.zip」を表示する)
+            //   - ImageReady: 画像領域を再描画して黒画面 (current_image=None) を表示
+            self.send_navigation_changed();
+            let _ = self.event_sender.send(DocumentEvent::ImageReady);
+            return Ok(());
         }
+
+        // 通常ファイルに到達したので、待機していた intent はクリアする
+        self.pending_navigation_intent = None;
 
         // 1. キャッシュヒット → 瞬時切替（永続フィルタはキャッシュ時に既に適用済み）
         if let Some(image) = self.cache.take(index) {
@@ -1305,6 +1311,7 @@ impl Document {
 
     /// 前のマーク画像へ移動
     pub fn navigate_prev_mark(&mut self) {
+        self.last_navigation_direction = NavigationDirection::Backward;
         if self.file_list.navigate_prev_mark() {
             let _ = self.load_current();
         }
@@ -1312,6 +1319,7 @@ impl Document {
 
     /// 次のマーク画像へ移動
     pub fn navigate_next_mark(&mut self) {
+        self.last_navigation_direction = NavigationDirection::Forward;
         if self.file_list.navigate_next_mark() {
             let _ = self.load_current();
         }
@@ -1320,7 +1328,10 @@ impl Document {
     // --- フォルダナビゲーション ---
 
     /// 前のフォルダへ移動
+    /// 「前のフォルダの先頭画像」を表示する仕様なので、PendingContainer 到達時も
+    /// 展開後グループの先頭で正しい (Forward 扱い)
     pub fn navigate_prev_folder(&mut self) {
+        self.last_navigation_direction = NavigationDirection::Forward;
         if self.file_list.navigate_prev_folder() {
             let _ = self.load_current();
         }
@@ -1328,6 +1339,7 @@ impl Document {
 
     /// 次のフォルダへ移動
     pub fn navigate_next_folder(&mut self) {
+        self.last_navigation_direction = NavigationDirection::Forward;
         if self.file_list.navigate_next_folder() {
             let _ = self.load_current();
         }
@@ -1335,6 +1347,7 @@ impl Document {
 
     /// ソート順で前の画像へ移動
     pub fn sort_navigate_back(&mut self) {
+        self.last_navigation_direction = NavigationDirection::Backward;
         let order = self.file_list.sort_order();
         if self.file_list.sorted_navigate(-1, order) {
             let _ = self.load_current();
@@ -1355,6 +1368,7 @@ impl Document {
 
     /// ソート順で次の画像へ移動
     pub fn sort_navigate_forward(&mut self) {
+        self.last_navigation_direction = NavigationDirection::Forward;
         let order = self.file_list.sort_order();
         if self.file_list.sorted_navigate(1, order) {
             let _ = self.load_current();
@@ -1402,8 +1416,12 @@ impl Document {
     }
 
     /// リスト変更後の共通処理（キャッシュ無効化+再読込+イベント送信）
+    /// 並べ替えで PendingContainer の位置関係が変わっている可能性があるため、
+    /// バックグラウンド展開を再優先度付け (現在位置基準) する。
     pub fn after_list_change(&mut self) {
         self.invalidate_cache();
+        // シャッフル/削除等でリスト位置が変わった可能性 → 展開キューを再ソート
+        self.reschedule_background_expansion();
         let _ = self.event_sender.send(DocumentEvent::FileListChanged);
         if self.file_list.len() > 0 {
             let _ = self.load_current();
