@@ -1990,10 +1990,17 @@ mod tests {
         assert_eq!(doc.file_list().current_index(), Some(0));
 
         // 先頭エントリが 1.zip 由来の ArchiveEntry であること。
+        // archive のフルパスは canonicalize により 8.3 短縮名が展開される場合があるため
+        // (Windows の GitHub Actions runner で RUNNER~1 → runneradmin 展開が発生する)
+        // 比較はファイル名だけで行う。
         let first = &doc.file_list().files()[0];
         match &first.source {
             FileSource::ArchiveEntry { archive, .. } => {
-                assert_eq!(archive, &zip1, "先頭エントリが 1.zip 由来になっていない");
+                assert_eq!(
+                    archive.file_name(),
+                    Some(std::ffi::OsStr::new("1.zip")),
+                    "先頭エントリが 1.zip 由来になっていない"
+                );
             }
             other => panic!("先頭が ArchiveEntry ではない: {other:?}"),
         }
@@ -2005,7 +2012,8 @@ mod tests {
         match &first_after.source {
             FileSource::ArchiveEntry { archive, .. } => {
                 assert_eq!(
-                    archive, &zip1,
+                    archive.file_name(),
+                    Some(std::ffi::OsStr::new("1.zip")),
                     "展開完了後の先頭エントリが 1.zip 由来になっていない"
                 );
             }
