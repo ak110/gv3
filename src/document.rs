@@ -95,6 +95,16 @@ enum ContainerExpandEvent {
     AllDone { generation: u64 },
 }
 
+/// パス列をファイル名の自然順 (大小文字無視) で並べ替える。
+/// D&D や CLI 引数の選択順を、ユーザー期待のエクスプローラー表示順へ寄せるために使う。
+fn sort_paths_natural(paths: &mut [PathBuf]) {
+    paths.sort_by(|a, b| {
+        let ak = a.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        let bk = b.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        natord::compare_ignore_case(ak, bk)
+    });
+}
+
 /// 単一コンテナを処理する (rayon workerから呼ばれる)
 fn process_single_container(path: &Path, archive_manager: &ArchiveManager) -> ContainerResult {
     if Document::is_pdf(path) {
@@ -503,18 +513,26 @@ impl Document {
         self.expand_rx = None;
         self.expand_generation += 1;
 
+        // D&D やシェルからの複数渡しは順序が選択順になるため、トップレベル入力を
+        // 自然順に並べ替えて以降の push 順 (= FileList のグループ出現順) を安定化する。
+        let mut inputs: Vec<PathBuf> = paths.to_vec();
+        sort_paths_natural(&mut inputs);
+
         // パスを分類しながら処理
         let mut containers: Vec<PathBuf> = Vec::new();
-        for path in paths {
+        for path in &inputs {
             let path = Self::canonicalize(path)?;
             if path.is_dir() {
                 // フォルダ: 内部を走査し、画像は直接追加、コンテナは収集
                 if let Ok(entries) = std::fs::read_dir(&path) {
-                    for entry in entries.flatten() {
-                        let entry_path = entry.path();
-                        if !entry_path.is_file() {
-                            continue;
-                        }
+                    // read_dir の列挙順は規定されないため、自然順に整えてから処理する。
+                    let mut files: Vec<PathBuf> = entries
+                        .flatten()
+                        .map(|e| e.path())
+                        .filter(|p| p.is_file())
+                        .collect();
+                    sort_paths_natural(&mut files);
+                    for entry_path in files {
                         if self.is_container(&entry_path) {
                             containers.push(entry_path);
                         } else if let Some(name) = entry_path.file_name().and_then(|n| n.to_str())
@@ -534,6 +552,11 @@ impl Document {
                 self.file_list.push(info);
             }
         }
+
+        // 即時展開対象 (containers[0]) と PendingContainer の push 順を安定化する。
+        // process_and_integrate_containers は先頭を即展開するため、ここでの並び順が
+        // FileList のグループ出現順 = 最終的な表示順序を左右する。
+        sort_paths_natural(&mut containers);
 
         // コンテナを展開・統合
         let errors = self.process_and_integrate_containers(&containers);
@@ -1938,6 +1961,56 @@ mod tests {
             }
         }
         assert!(got_error, "部分失敗時にエラー通知が送信されなかった");
+
+        cleanup_test_dir(&dir);
+    }
+
+    #[test]
+    fn open_multiple_sorts_containers_naturally() {
+        // 1.zip / 2.zip / 10.zip を用意し、意図的に自然順と異なるドロップ順で渡しても
+        // 自然順先頭 (1.zip) が即時展開されて FileList の先頭グループになることを検証する。
+        let dir = setup_test_dir("open_multi_sort", 0);
+        let zip1 = dir.join("1.zip");
+        let zip2 = dir.join("2.zip");
+        let zip10 = dir.join("10.zip");
+        create_test_zip(&zip1, 1);
+        create_test_zip(&zip2, 1);
+        create_test_zip(&zip10, 1);
+
+        // ドロップ順を崩して渡す (先頭が 10.zip、次が 2.zip、最後が 1.zip)。
+        // 修正前はこの順で containers[0] = 10.zip が即時展開され、
+        // FileList のグループ出現順で 10.zip が先頭になっていた。
+        let inputs = vec![zip10.clone(), zip2.clone(), zip1.clone()];
+
+        let (mut doc, _rx) = test_document();
+        doc.open_multiple(&inputs).unwrap();
+
+        // 即時展開: 1.zip の 1 エントリ + 残り 2 つのプレースホルダで合計 3 エントリ。
+        assert_eq!(doc.file_list().len(), 3);
+        assert_eq!(doc.file_list().current_index(), Some(0));
+
+        // 先頭エントリが 1.zip 由来の ArchiveEntry であること。
+        let first = &doc.file_list().files()[0];
+        match &first.source {
+            FileSource::ArchiveEntry { archive, .. } => {
+                assert_eq!(archive, &zip1, "先頭エントリが 1.zip 由来になっていない");
+            }
+            other => panic!("先頭が ArchiveEntry ではない: {other:?}"),
+        }
+
+        // 全コンテナを展開し終えても先頭グループが 1.zip であることを確認する。
+        doc.expand_all_pending_sync();
+        assert_eq!(doc.file_list().len(), 3);
+        let first_after = &doc.file_list().files()[0];
+        match &first_after.source {
+            FileSource::ArchiveEntry { archive, .. } => {
+                assert_eq!(
+                    archive, &zip1,
+                    "展開完了後の先頭エントリが 1.zip 由来になっていない"
+                );
+            }
+            other => panic!("展開後の先頭が ArchiveEntry ではない: {other:?}"),
+        }
 
         cleanup_test_dir(&dir);
     }
