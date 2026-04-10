@@ -150,6 +150,8 @@ const OLD_BOOKMARK_PROGID: &str = "gv3.Bookmark";
 const BOOKMARK_EXTENSION: &str = ".gvbm";
 /// 旧ブックマーク拡張子 (後方互換)
 const OLD_BOOKMARK_EXTENSION: &str = ".gv3bm";
+/// 旧 C++ 実装のブックマーク拡張子
+const LEGACY_BOOKMARK_EXTENSION: &str = ".gvb";
 
 /// ファイル関連付けを登録する
 pub fn register() -> Result<()> {
@@ -219,8 +221,9 @@ pub fn register() -> Result<()> {
         add_open_with_progid(ext, ARCHIVE_PROGID)?;
     }
     add_open_with_progid(BOOKMARK_EXTENSION, BOOKMARK_PROGID)?;
-    // 旧ブックマーク拡張子も新ProgIDに関連付け (既存.gv3bmファイルを開けるように)
+    // 旧ブックマーク拡張子も新ProgIDに関連付け (既存ファイルを開けるように)
     add_open_with_progid(OLD_BOOKMARK_EXTENSION, BOOKMARK_PROGID)?;
+    add_open_with_progid(LEGACY_BOOKMARK_EXTENSION, BOOKMARK_PROGID)?;
 
     Ok(())
 }
@@ -286,6 +289,7 @@ pub fn unregister() -> Result<()> {
     }
     remove_open_with_progid(BOOKMARK_EXTENSION, BOOKMARK_PROGID);
     remove_open_with_progid(OLD_BOOKMARK_EXTENSION, BOOKMARK_PROGID);
+    remove_open_with_progid(LEGACY_BOOKMARK_EXTENSION, BOOKMARK_PROGID);
 
     Ok(())
 }

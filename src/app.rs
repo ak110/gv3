@@ -238,6 +238,18 @@ impl AppWindow {
         if initial_files.is_empty() {
             // ファイル未指定起動: バージョン入りタイトルを反映
             app.update_title();
+        } else if initial_files.len() == 1 && crate::bookmark::is_bookmark_file(&initial_files[0]) {
+            // 単一ブックマークファイル: ブックマークとして読み込む
+            let is_archive = |p: &std::path::Path| app.document.is_archive_path(p);
+            match crate::bookmark::load_bookmark_from_path(&initial_files[0], &is_archive) {
+                Ok(data) => {
+                    if let Err(e) = app.document.load_bookmark_data(data) {
+                        app.show_error_title(&format!("ブックマークの読み込みに失敗しました: {e}"));
+                    }
+                }
+                Err(e) => app.show_error_title(&format!("ブックマーク読み込み失敗: {e}")),
+            }
+            app.process_document_events();
         } else {
             let result = if initial_files.len() > 1 {
                 // 複数パス: フォルダ・コンテナ・画像の混在をすべてフラットに展開
@@ -704,6 +716,7 @@ impl AppWindow {
                     return LRESULT(0);
                 }
                 WM_NOTIFY => {
+                    // SAFETY: WM_NOTIFY の lparam は OS が有効な NMHDR へのポインタを保証する
                     let nmhdr = unsafe { &*(lparam.0 as *const NMHDR) };
                     if nmhdr.hwndFrom == app.file_list_panel.listview_hwnd() {
                         return app.handle_file_list_notify(nmhdr, lparam);
@@ -1638,6 +1651,7 @@ impl AppWindow {
         match nmhdr.code {
             // テキスト要求: 該当インデックスのラベルを ListView 提供のバッファへコピー
             i if i == LVN_GETDISPINFOW => {
+                // SAFETY: LVN_GETDISPINFOW の lparam は OS が有効な NMLVDISPINFOW へのポインタを保証する
                 let dispinfo = unsafe { &mut *(lparam.0 as *mut NMLVDISPINFOW) };
                 if (dispinfo.item.mask & LVIF_TEXT).0 != 0 {
                     let idx = dispinfo.item.iItem as usize;
@@ -1654,6 +1668,8 @@ impl AppWindow {
                                 wide.truncate(max - 1);
                             }
                             wide.push(0);
+                            // SAFETY: pszText は OS が確保した cchTextMax 文字分のバッファを指す。
+                            // wide.len() <= max (cchTextMax) を上記で保証済みのため範囲内に収まる。
                             unsafe {
                                 std::ptr::copy_nonoverlapping(
                                     wide.as_ptr(),
@@ -1668,6 +1684,7 @@ impl AppWindow {
             }
             // 選択変更通知: ユーザーのクリック・マウスホイール等で iItem が変わった
             i if i == LVN_ITEMCHANGED => {
+                // SAFETY: LVN_ITEMCHANGED の lparam は OS が有効な NMLISTVIEW へのポインタを保証する
                 let nmlv = unsafe { &*(lparam.0 as *const NMLISTVIEW) };
                 // 状態変化のうち SELECTED ビットが新たに立ったときだけ反応
                 let became_selected = (nmlv.uChanged.0 & LVIF_STATE.0) != 0

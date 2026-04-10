@@ -16,6 +16,15 @@ pub struct BookmarkData {
     pub index: usize,
 }
 
+/// パスがブックマーク拡張子 (.gvbm / .gv3bm / .gvb) を持つか判定する
+pub fn is_bookmark_file(path: &Path) -> bool {
+    path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+        e.eq_ignore_ascii_case("gvbm")
+            || e.eq_ignore_ascii_case("gv3bm")
+            || e.eq_ignore_ascii_case("gvb")
+    })
+}
+
 /// ブックマークフォルダのパスを返す (exeと同じディレクトリの"bookmarks")
 pub fn bookmark_dir() -> PathBuf {
     std::env::current_exe()
@@ -93,7 +102,7 @@ pub fn save_bookmark(
     Ok(())
 }
 
-/// ブックマークを読み込む
+/// ダイアログでブックマークを選択して読み込む
 ///
 /// `is_archive` は旧形式 (`.gvb`) のパス文字列からアーカイブを検出するために使う。
 /// 新形式 (`.gvbm` / `.gv3bm`) では型情報がタブ区切りで明示されているため使われない。
@@ -105,22 +114,26 @@ pub fn load_bookmark(
     let Some(path) = path else {
         return Ok(None);
     };
+    load_bookmark_from_path(&path, &is_archive).map(Some)
+}
 
-    let bytes = std::fs::read(&path)
+/// 指定パスからブックマークを読み込む (CLI 引数・シェル関連付け経由用)
+pub fn load_bookmark_from_path(
+    path: &Path,
+    is_archive: &impl Fn(&Path) -> bool,
+) -> Result<BookmarkData> {
+    let bytes = std::fs::read(path)
         .with_context(|| format!("ブックマーク読み込み失敗: {}", path.display()))?;
 
     // UTF-16 LE BOM → 旧形式 (.gvb)
     if let Some(rest) = bytes.strip_prefix(&[0xFF, 0xFE]) {
-        return Ok(Some(legacy::parse_legacy_bookmark_utf16le(
-            rest,
-            &is_archive,
-        )));
+        return Ok(legacy::parse_legacy_bookmark_utf16le(rest, is_archive));
     }
 
     // 新形式 (UTF-8)
     let content = std::str::from_utf8(&bytes)
         .with_context(|| format!("ブックマークのUTF-8デコード失敗: {}", path.display()))?;
-    Ok(Some(parse_bookmark(content)))
+    Ok(parse_bookmark(content))
 }
 
 /// ブックマークテキストをパースする
