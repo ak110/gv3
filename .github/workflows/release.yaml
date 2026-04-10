@@ -52,6 +52,22 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Check for existing release tag
+        id: existing
+        shell: pwsh
+        run: |
+          $tag = git tag --points-at HEAD | Where-Object { $_ -match '^v\d+\.' } | Select-Object -First 1
+          if ($tag) {
+            Write-Host "Found existing tag $tag on HEAD, reusing"
+            "version=$($tag.TrimStart('v'))" >> $env:GITHUB_OUTPUT
+            "rerun=true" >> $env:GITHUB_OUTPUT
+          } else {
+            "rerun=false" >> $env:GITHUB_OUTPUT
+          }
 
       - name: Setup tools
         uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
@@ -60,11 +76,13 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
 
       - name: Configure git identity
+        if: steps.existing.outputs.rerun != 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Bump version
+        if: steps.existing.outputs.rerun != 'true'
         id: bump
         shell: pwsh
         run: |
@@ -92,11 +110,14 @@ jobs:
           Write-Host "New version: $newVersion"
 
       - name: Update Cargo.lock
+        if: steps.existing.outputs.rerun != 'true'
         run: cargo generate-lockfile
 
-      - run: mise run build
+      - if: steps.existing.outputs.rerun != 'true'
+        run: mise run build
 
       - name: Create release archive
+        if: steps.existing.outputs.rerun != 'true'
         shell: pwsh
         run: |
           $version = "${{ steps.bump.outputs.version }}"
@@ -111,6 +132,7 @@ jobs:
           ) -DestinationPath $zipName
 
       - name: Update version.json for GitHub Pages
+        if: steps.existing.outputs.rerun != 'true'
         shell: pwsh
         run: |
           $version = "${{ steps.bump.outputs.version }}"
@@ -121,20 +143,34 @@ jobs:
           Set-Content -Path "docs/public/version.json" -Value $json
 
       - name: Commit, tag and push
+        if: steps.existing.outputs.rerun != 'true'
         run: |
           git add Cargo.toml Cargo.lock docs/public/version.json
           git commit -m "release: v${{ steps.bump.outputs.version }}"
           git tag "v${{ steps.bump.outputs.version }}"
           git push origin HEAD --tags
 
+      - name: Generate release notes
+        run: git cliff --latest --strip header --output CHANGES.md
+
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: pwsh
         run: |
-          gh release create "v${{ steps.bump.outputs.version }}" `
-            "gv-v${{ steps.bump.outputs.version }}.zip" `
-            --title "v${{ steps.bump.outputs.version }}" `
-            --generate-notes
+          $version = if ("${{ steps.existing.outputs.rerun }}" -eq "true") {
+            "${{ steps.existing.outputs.version }}"
+          } else {
+            "${{ steps.bump.outputs.version }}"
+          }
+          $tag = "v$version"
+          $asset = "gv-v$version.zip"
+          $exists = gh release view $tag 2>&1
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Release $tag already exists, skipping"
+          } else {
+            gh release create $tag $asset --title $tag --notes-file CHANGES.md
+          }
 
       - name: Trigger docs deployment
         env:

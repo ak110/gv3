@@ -3,6 +3,7 @@ rust = "1.94"
 node = "lts"
 pnpm = "latest"
 pinact = "latest"
+git-cliff = "latest"
 
 [tasks.setup]
 description = "開発環境のセットアップ"
