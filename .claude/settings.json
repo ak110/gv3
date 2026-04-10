@@ -1,4 +1,15 @@
 {
+  "extraKnownMarketplaces": {
+    "ak110-dotfiles": {
+      "source": {
+        "source": "github",
+        "repo": "ak110/dotfiles"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "agent-toolkit@ak110-dotfiles": true
+  },
   "hooks": {
     "PostToolUse": [
       {
