@@ -45,7 +45,8 @@ pub(super) fn set_key_value(root: HKEY, subkey: &str, value: &str) -> Result<()>
         anyhow::bail!("レジストリキー作成失敗: {subkey}");
     }
 
-    // デフォルト値を設定
+    // SAFETY: wide_val は直上で作成した Vec<u16> でありこのブロック内で借用が有効。
+    // from_raw_parts は wide_val.len() * 2 バイトを u8 スライスとして参照しており範囲内に収まる。
     let result = unsafe {
         RegSetValueExW(
             hkey,

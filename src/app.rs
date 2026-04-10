@@ -238,21 +238,9 @@ impl AppWindow {
         if initial_files.is_empty() {
             // ファイル未指定起動: バージョン入りタイトルを反映
             app.update_title();
-        } else if initial_files.len() == 1 && crate::bookmark::is_bookmark_file(&initial_files[0]) {
-            // 単一ブックマークファイル: ブックマークとして読み込む
-            let is_archive = |p: &std::path::Path| app.document.is_archive_path(p);
-            match crate::bookmark::load_bookmark_from_path(&initial_files[0], &is_archive) {
-                Ok(data) => {
-                    if let Err(e) = app.document.load_bookmark_data(data) {
-                        app.show_error_title(&format!("ブックマークの読み込みに失敗しました: {e}"));
-                    }
-                }
-                Err(e) => app.show_error_title(&format!("ブックマーク読み込み失敗: {e}")),
-            }
-            app.process_document_events();
         } else {
             let result = if initial_files.len() > 1 {
-                // 複数パス: フォルダ・コンテナ・画像の混在をすべてフラットに展開
+                // 複数パス: フォルダ・コンテナ・画像・ブックマークの混在をフラットに展開
                 app.document.open_multiple(initial_files)
             } else if initial_files[0].is_dir() {
                 app.document.open_folder(&initial_files[0])
@@ -260,7 +248,7 @@ impl AppWindow {
                 app.document.open(&initial_files[0])
             };
             if let Err(e) = result {
-                app.show_error_title(&format!("画像を開けませんでした: {e}"));
+                app.show_error_title(&format!("ファイルを開けませんでした: {e}"));
             }
             app.process_document_events();
         }

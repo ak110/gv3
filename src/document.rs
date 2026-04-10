@@ -420,6 +420,11 @@ impl Document {
     pub fn open(&mut self, path: &Path) -> Result<()> {
         let path = Self::canonicalize(path)?;
 
+        // ブックマーク判定
+        if crate::bookmark::is_bookmark_file(&path) {
+            return self.open_bookmark(&path);
+        }
+
         // PDF判定
         if Self::is_pdf(&path) {
             return self.open_pdf(&path);
@@ -453,6 +458,13 @@ impl Document {
         self.file_list.populate_single(&path)?;
         let _ = self.event_sender.send(DocumentEvent::FileListChanged);
         self.load_current()
+    }
+
+    /// ブックマークファイルを開く
+    fn open_bookmark(&mut self, bookmark_path: &Path) -> Result<()> {
+        let is_archive = |p: &Path| self.archive_manager.is_archive(p);
+        let data = crate::bookmark::load_bookmark_from_path(bookmark_path, &is_archive)?;
+        self.load_bookmark_data(data)
     }
 
     /// アーカイブを開く (単一アーカイブ)
@@ -520,10 +532,11 @@ impl Document {
 
         // パスを分類しながら処理
         let mut containers: Vec<PathBuf> = Vec::new();
+        let mut bookmarks: Vec<PathBuf> = Vec::new();
         for path in &inputs {
             let path = Self::canonicalize(path)?;
             if path.is_dir() {
-                // フォルダ: 内部を走査し、画像は直接追加、コンテナは収集
+                // フォルダ: 内部を走査し、画像は直接追加、コンテナ/ブックマークは収集
                 if let Ok(entries) = std::fs::read_dir(&path) {
                     // read_dir の列挙順は規定されないため、自然順に整えてから処理する。
                     let mut files: Vec<PathBuf> = entries
@@ -533,7 +546,9 @@ impl Document {
                         .collect();
                     sort_paths_natural(&mut files);
                     for entry_path in files {
-                        if self.is_container(&entry_path) {
+                        if crate::bookmark::is_bookmark_file(&entry_path) {
+                            bookmarks.push(entry_path);
+                        } else if self.is_container(&entry_path) {
                             containers.push(entry_path);
                         } else if let Some(name) = entry_path.file_name().and_then(|n| n.to_str())
                             && self.file_list.registry().is_image_extension(name)
@@ -543,6 +558,8 @@ impl Document {
                         }
                     }
                 }
+            } else if crate::bookmark::is_bookmark_file(&path) {
+                bookmarks.push(path);
             } else if self.is_container(&path) {
                 containers.push(path);
             } else if let Some(name) = path.file_name().and_then(|n| n.to_str())
@@ -550,6 +567,35 @@ impl Document {
                 && let Ok(info) = crate::file_info::FileInfo::from_path(&path)
             {
                 self.file_list.push(info);
+            }
+        }
+
+        // ブックマークからエントリを展開して file_list / containers に振り分ける
+        for bm_path in &bookmarks {
+            let is_archive = |p: &Path| self.archive_manager.is_archive(p);
+            if let Ok(data) = crate::bookmark::load_bookmark_from_path(bm_path, &is_archive) {
+                for source in data.entries {
+                    match source {
+                        FileSource::File(path) => {
+                            if path.exists()
+                                && let Ok(info) = crate::file_info::FileInfo::from_path(&path)
+                            {
+                                self.file_list.push(info);
+                            }
+                        }
+                        FileSource::ArchiveEntry { archive, .. }
+                            if !containers.contains(&archive) =>
+                        {
+                            containers.push(archive);
+                        }
+                        FileSource::PendingContainer { container_path }
+                            if !containers.contains(&container_path) =>
+                        {
+                            containers.push(container_path);
+                        }
+                        _ => {}
+                    }
+                }
             }
         }
 
@@ -1319,9 +1365,11 @@ impl Document {
         &self.file_list
     }
 
-    /// パスがコンテナ (アーカイブまたはPDF) か判定する
+    /// パスがコンテナ (アーカイブ・PDF・ブックマーク) か判定する
     pub fn is_container(&self, path: &Path) -> bool {
-        self.archive_manager.is_archive(path) || Self::is_pdf(path)
+        self.archive_manager.is_archive(path)
+            || Self::is_pdf(path)
+            || crate::bookmark::is_bookmark_file(path)
     }
 
     /// パスがアーカイブ拡張子を持つか判定する (ブックマーク復元時のコンテナ検出用)
