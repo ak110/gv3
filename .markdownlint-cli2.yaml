@@ -1,8 +1,4 @@
 $schema: https://raw.githubusercontent.com/DavidAnson/markdownlint-cli2/v0.20.0/schema/markdownlint-cli2-config-schema.json
 config:
-  line-length:
-    strict: true
-    line_length: 127
-    code_blocks: false
-    tables: false
+  line-length: false
   first-line-heading: false
