@@ -6,8 +6,8 @@
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
     "docs:preview": "vitepress preview docs",
-    "lint": "textlint 'docs/**/*.md' README.md && markdownlint-cli2 'docs/**/*.md' README.md && prettier --check .",
-    "lint:fix": "textlint --fix 'docs/**/*.md' README.md && markdownlint-cli2 --fix 'docs/**/*.md' README.md && prettier --write ."
+    "lint": "textlint 'docs/**/*.md' README.md CLAUDE.md && markdownlint-cli2 'docs/**/*.md' README.md CLAUDE.md && prettier --check .",
+    "lint:fix": "textlint --fix 'docs/**/*.md' README.md CLAUDE.md && markdownlint-cli2 --fix 'docs/**/*.md' README.md CLAUDE.md && prettier --write ."
   },
   "devDependencies": {
     "markdownlint-cli2": "^0.22.0",
