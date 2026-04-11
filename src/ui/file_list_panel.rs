@@ -186,11 +186,34 @@ impl FileListPanel {
         format!("{mark}{cache} {}", info.file_name)
     }
 
-    /// 現在位置をハイライトしてスクロール
+    /// 現在位置をハイライトしてスクロールする
+    ///
+    /// 選択項目が画面の 2/5〜3/5 付近に収まるよう、表示可能項目数の 2/5 を上下マージンとして
+    /// 確保する scrolloff 付きスクロールを行う。ナビゲーション先のプレビューを広く確保する狙い。
+    ///
+    /// 冒頭で ListView の現選択が target と一致する場合は早期リターンする。
+    /// これは `LVN_ITEMCHANGED`（クリック・ホイール等）由来で `navigate_to` →
+    /// `process_document_events` 経由で再呼び出しされたケースを想定したもので、
+    /// クリックで選んだ行に scrolloff が追加で当たって勝手にスクロールしないようにする。
     pub fn set_selection(&self, index: usize) {
         let i = i32::try_from(index).unwrap_or(i32::MAX);
         let sel_focus = LIST_VIEW_ITEM_STATE_FLAGS(LVIS_SELECTED.0 | LVIS_FOCUSED.0);
         unsafe {
+            // ListView 上の現選択 index を取得（無選択なら -1）
+            let current = SendMessageW(
+                self.listview,
+                LVM_GETNEXTITEM,
+                Some(WPARAM(usize::MAX)),
+                Some(LPARAM(LVNI_SELECTED as isize)),
+            )
+            .0;
+            if current == i as isize {
+                // クリック由来などで既に target が選択済みのケース。
+                // ここで scrolloff を適用するとクリックが勝手にスクロールを引き起こすため、
+                // 何もせずリターンする。
+                return;
+            }
+
             // 既存の選択を解除 (state=0 で SELECTED|FOCUSED ビットをクリア)
             let mut clear = LVITEMW {
                 stateMask: sel_focus,
@@ -216,10 +239,30 @@ impl FileListPanel {
                 Some(WPARAM(i as usize)),
                 Some(LPARAM(std::ptr::from_mut(&mut item) as isize)),
             );
+
+            // scrolloff 付きでスクロールする
+            // 表示可能項目数の 2/5 を上下マージンとして確保し、target の上下両方に
+            // マージン分の可視領域を確保する。片方向ナビ時は片方しか実スクロールを
+            // 起こさないためちらつきは発生しない。
+            let visible_count = SendMessageW(self.listview, LVM_GETCOUNTPERPAGE, None, None).0;
+            let total = SendMessageW(self.listview, LVM_GETITEMCOUNT, None, None).0;
+            if total <= 0 {
+                return;
+            }
+            let margin = (visible_count * 2 / 5).max(0);
+            let target = i as isize;
+            let high = (target + margin).min(total - 1).max(0);
+            let low = (target - margin).max(0);
             SendMessageW(
                 self.listview,
                 LVM_ENSUREVISIBLE,
-                Some(WPARAM(i as usize)),
+                Some(WPARAM(high as usize)),
+                Some(LPARAM(0)),
+            );
+            SendMessageW(
+                self.listview,
+                LVM_ENSUREVISIBLE,
+                Some(WPARAM(low as usize)),
                 Some(LPARAM(0)),
             );
         }
