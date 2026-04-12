@@ -1,4 +1,5 @@
 [tools]
+uv = "latest"
 rust = "1.94"
 node = "lts"
 pnpm = "latest"
