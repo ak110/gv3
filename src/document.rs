@@ -15,7 +15,7 @@ use crate::file_info::FileSource;
 use crate::file_list::{FileList, NavigationDirection};
 use crate::image::{DecodedImage, DecoderChain};
 use crate::persistent_filter::PersistentFilter;
-use crate::prefetch::{LoadResponse, PageCache, PrefetchEngine};
+use crate::prefetch::{PrefetchCoordinator, PrefetchEngine, PrefetchEvent};
 
 /// ZIPファイルのバッファ (mmapまたはメモリ読み込み)
 pub(crate) enum ZipBuffer {
@@ -233,10 +233,7 @@ pub struct Document {
     current_image: Option<DecodedImage>,
     file_list: FileList,
     // 先読みエンジン
-    cache: PageCache,
-    prefetch: Option<PrefetchEngine>,
-    cache_backward: usize,
-    cache_forward: usize,
+    prefetch_coord: PrefetchCoordinator,
     // アーカイブ対応
     archive_manager: Arc<ArchiveManager>,
     archive_temp_dirs: Vec<PathBuf>,
@@ -280,10 +277,7 @@ impl Document {
             decoder,
             current_image: None,
             file_list: FileList::new(registry),
-            cache: PageCache::new(0),
-            prefetch: None,
-            cache_backward: 0,
-            cache_forward: 0,
+            prefetch_coord: PrefetchCoordinator::new(),
             archive_manager: Arc::new(archive_manager),
             archive_temp_dirs: Vec::new(),
             current_containers: Vec::new(),
@@ -315,72 +309,31 @@ impl Document {
     ) -> Result<()> {
         // UI通知コールバックをバックグラウンド展開用にも保持
         self.ui_notify = Some(Arc::clone(&notify));
-        self.prefetch = Some(PrefetchEngine::new(
+        let engine = PrefetchEngine::new(
             Box::new(move || notify()),
             Arc::clone(&self.decoder),
             Arc::clone(&self.archive_manager),
             Arc::clone(&self.zip_buffers),
-        )?);
-        self.update_cache_range(cache_budget, base_image_size);
+        )?;
+        self.prefetch_coord
+            .start(engine, cache_budget, base_image_size);
         Ok(())
-    }
-
-    /// キャッシュ範囲を再計算する
-    /// 前方4枚・後方2枚を上限とし、スロット数で枚数を制御する。
-    /// メモリ予算はcache_budget (空きメモリの50%) をそのまま使う。
-    /// base_image_sizeはスロット数の計算にのみ使用する (実画像が大きい場合でも
-    /// キャッシュが機能するよう、予算の追加制限はかけない)。
-    fn update_cache_range(&mut self, cache_budget: usize, base_image_size: usize) {
-        const MAX_CACHE_FORWARD: usize = 4;
-        const MAX_CACHE_BACKWARD: usize = 2;
-
-        // PrefetchConfig::base_image_size() で 0 はクランプされるが、
-        // 内部呼び出し経路でも防御層として 1 にフォールバックしておく。
-        let base = base_image_size.max(1);
-        let total_slots = (cache_budget / base).max(3);
-        self.cache_forward = (total_slots * 2 / 3).clamp(1, MAX_CACHE_FORWARD);
-        self.cache_backward = (total_slots / 3).clamp(1, MAX_CACHE_BACKWARD);
-        self.cache.set_max_memory(cache_budget);
     }
 
     /// 先読みレスポンスを処理する (キャッシュ格納 + current_image更新)
     pub fn process_prefetch_responses(&mut self) {
-        let Some(prefetch) = &self.prefetch else {
-            return;
-        };
-        let current_gen = prefetch.generation();
-        let responses = prefetch.drain_responses();
-
-        for resp in responses {
-            match resp {
-                LoadResponse::Loaded {
-                    index,
-                    image,
-                    generation,
-                } => {
-                    // 古い世代のレスポンスは破棄
-                    if generation != current_gen {
-                        continue;
-                    }
-                    // 永続フィルタを先読み結果にも適用
-                    let image = self.persistent_filter.apply(&image).unwrap_or(image);
-                    // 現在表示すべきページでまだ画像がない場合、即表示
-                    let is_current = self.file_list.current_index() == Some(index)
-                        && self.current_image.is_none();
-                    if is_current {
-                        self.current_image = Some(image);
-                        let _ = self.event_sender.send(DocumentEvent::ImageReady);
-                    } else {
-                        self.cache.insert(index, image);
-                    }
+        let events = self.prefetch_coord.process_responses(
+            self.file_list.current_index(),
+            self.current_image.is_some(),
+            &self.persistent_filter,
+        );
+        for event in events {
+            match event {
+                PrefetchEvent::CurrentImageReady(image) => {
+                    self.current_image = Some(image);
+                    let _ = self.event_sender.send(DocumentEvent::ImageReady);
                 }
-                LoadResponse::Failed {
-                    generation, error, ..
-                } => {
-                    if generation != current_gen {
-                        continue;
-                    }
-                    // 先読みの失敗ではmark_failedしない (一時的なエラーの可能性)
+                PrefetchEvent::Error(error) => {
                     let _ = self.event_sender.send(DocumentEvent::Error(error));
                 }
             }
@@ -389,71 +342,17 @@ impl Document {
 
     /// 現在位置を中心に先読みをスケジュールする
     fn schedule_prefetch(&mut self) {
-        let Some(prefetch) = &mut self.prefetch else {
-            return;
-        };
         let Some(center) = self.file_list.current_index() else {
             return;
         };
-
-        // 範囲外キャッシュを削除
-        self.cache
-            .evict_outside(center, self.cache_backward, self.cache_forward);
-
-        // 世代を進行 (前回のin-flightリクエストを無効化)
-        prefetch.advance_generation();
-
-        let files = self.file_list.files();
-        let len = files.len();
-
-        // 距離ベースの交互読み込み: 前1, 後1, 前2, 後2, ... の順でリクエスト
-        let mut indices = Vec::new();
-        let max_dist = self.cache_forward.max(self.cache_backward);
-        for dist in 1..=max_dist {
-            // 前方 (次のページ)
-            let fwd = center + dist;
-            if dist <= self.cache_forward && fwd < len {
-                indices.push(fwd);
-            }
-            // 後方 (前のページ)
-            if dist <= self.cache_backward && dist <= center {
-                indices.push(center - dist);
-            }
-        }
-
-        for idx in indices {
-            // 未展開コンテナは先読み対象外
-            if matches!(files[idx].source, FileSource::PendingContainer { .. }) {
-                continue;
-            }
-            if !self.cache.contains(idx) {
-                let pdf_page = match &files[idx].source {
-                    FileSource::PdfPage {
-                        pdf_path,
-                        page_index,
-                    } => Some((pdf_path.clone(), *page_index)),
-                    _ => None,
-                };
-                let archive_entry = match &files[idx].source {
-                    FileSource::ArchiveEntry {
-                        archive,
-                        entry,
-                        on_demand: true,
-                    } => Some((archive.clone(), entry.clone())),
-                    _ => None,
-                };
-                prefetch.request_load(idx, files[idx].path.clone(), pdf_page, archive_entry);
-            }
-        }
+        self.prefetch_coord
+            .reschedule(center, self.file_list.files());
     }
 
     /// キャッシュを無効化する (フォルダ切替、再読み込み時)
     fn invalidate_cache(&mut self) {
-        self.cache.clear();
+        self.prefetch_coord.invalidate();
         self.file_list.clear_failed();
-        if let Some(prefetch) = &mut self.prefetch {
-            prefetch.advance_generation();
-        }
     }
 
     /// ファイルを開く (親フォルダの画像を列挙し、指定ファイルを表示)
@@ -1198,8 +1097,13 @@ impl Document {
             );
         }
 
-        self.invalidate_cache();
-        self.schedule_prefetch();
+        self.file_list.clear_failed();
+        if let Some(center) = self.file_list.current_index() {
+            self.prefetch_coord
+                .invalidate_and_reschedule(center, self.file_list.files());
+        } else {
+            self.prefetch_coord.invalidate();
+        }
         let _ = self.event_sender.send(DocumentEvent::FileListChanged);
     }
 
@@ -1309,7 +1213,7 @@ impl Document {
         self.pending_navigation_intent = None;
 
         // 1. キャッシュヒット → 瞬時切替 (永続フィルタはキャッシュ時に既に適用済み)
-        if let Some(image) = self.cache.take(index) {
+        if let Some(image) = self.prefetch_coord.take(index) {
             self.current_image = Some(image);
             let _ = self.event_sender.send(DocumentEvent::ImageReady);
             self.send_navigation_changed();
@@ -1732,7 +1636,7 @@ impl Document {
     /// 指定インデックスの画像がキャッシュ済みか判定する
     /// current_imageとして保持中の画像も「キャッシュ済み」として扱う
     pub fn is_cached(&self, index: usize) -> bool {
-        self.cache.contains(index)
+        self.prefetch_coord.contains(index)
             || (self.file_list.current_index() == Some(index) && self.current_image.is_some())
     }
 
@@ -1964,14 +1868,14 @@ mod tests {
         let base_size = 1024 * 1536 * 4; // ~6MB
 
         // 小さいメモリ予算: 最小3スロット → forward=2, backward=1
-        doc.update_cache_range(base_size * 3, base_size);
-        assert_eq!(doc.cache_forward, 2);
-        assert_eq!(doc.cache_backward, 1);
+        doc.prefetch_coord
+            .update_cache_range(base_size * 3, base_size);
+        assert_eq!(doc.prefetch_coord.cache_range(), (2, 1));
 
         // 大きいメモリ予算: 上限に達する → forward=4, backward=2
-        doc.update_cache_range(base_size * 100, base_size);
-        assert_eq!(doc.cache_forward, 4);
-        assert_eq!(doc.cache_backward, 2);
+        doc.prefetch_coord
+            .update_cache_range(base_size * 100, base_size);
+        assert_eq!(doc.prefetch_coord.cache_range(), (4, 2));
     }
 
     #[test]
