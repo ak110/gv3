@@ -12,7 +12,7 @@
 Claude Codeがコミット前に検証する際は、`mise run test`の代わりに以下を実行する。JSON Lines出力によりLLMがツール別診断を効率的に解釈できる。
 
 ```bash
-uvx pyfltr run --output-format=jsonl
+uvx pyfltr run --output-format=jsonl | tail -30
 ```
 
 人間の開発者は従来どおり`mise run test`を使用する。
