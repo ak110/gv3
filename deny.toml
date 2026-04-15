@@ -21,6 +21,13 @@ allow = [
     "Unlicense",
     "CDLA-Permissive-2.0",
 ]
+# 個別クレートに対するライセンス例外
+exceptions = [
+    # sevenz-rust2 → bzip2 → libbz2-rs-sys の bzip2 純正ライセンス
+    { name = "libbz2-rs-sys", allow = ["bzip2-1.0.6"] },
+    # sevenz-rust2 → ppmd-rust のパブリックドメイン系ライセンス
+    { name = "ppmd-rust", allow = ["CC0-1.0", "MIT-0"] },
+]
 
 [bans]
 multiple-versions = "warn"
