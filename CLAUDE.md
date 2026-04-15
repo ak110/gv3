@@ -3,7 +3,7 @@
 ## 開発手順
 
 - rust, node, pnpmなどはmise経由で実行する
-- コミット前の検証方法: `uvx pyfltr run --output-format=jsonl | tail -30`
+- コミット前の検証方法: `uvx pyfltr run-for-agent`
   - ドキュメントなどのみの変更の場合は省略可（pre-commitで実行されるため）
 
 ## 注意点
