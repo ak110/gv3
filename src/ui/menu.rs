@@ -185,6 +185,7 @@ pub fn build_menu_bar() -> HMENU {
         let help_menu = create_popup(&[
             Some((Action::ShowHelp, "ヘルプ\tF1")),
             Some((Action::CheckUpdate, "アップデートを確認...")),
+            Some((Action::OpenHomepage, "ホームページを開く...")),
             None,
             Some((Action::RegisterShell, "シェル統合を登録...")),
             Some((Action::UnregisterShell, "シェル統合を解除...")),
@@ -410,6 +411,7 @@ const ALL_ACTIONS: &[Action] = &[
     Action::OpenTempFolder,
     Action::ShowHelp,
     Action::CheckUpdate,
+    Action::OpenHomepage,
     Action::RegisterShell,
     Action::UnregisterShell,
     Action::Exit,

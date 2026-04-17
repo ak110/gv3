@@ -981,6 +981,25 @@ impl AppWindow {
         }
     }
 
+    fn action_open_homepage(&mut self) {
+        let url = windows::core::w!("https://github.com/ak110/gv");
+        let result = unsafe {
+            windows::Win32::UI::Shell::ShellExecuteW(
+                Some(self.hwnd),
+                windows::core::PCWSTR::null(),
+                url,
+                windows::core::PCWSTR::null(),
+                windows::core::PCWSTR::null(),
+                SW_SHOWNORMAL,
+            )
+        };
+        // ShellExecuteW は戻り値が32以下の場合エラー（WinSDK仕様）
+        let code = result.0 as isize;
+        if code <= 32 {
+            self.show_error_title(&format!("ブラウザの起動に失敗しました: {code}"));
+        }
+    }
+
     fn action_bookmark_load(&mut self) {
         if !self.guard_unsaved_edit() {
             return;
@@ -1429,6 +1448,9 @@ impl AppWindow {
             Action::CheckUpdate => {
                 self.check_for_update();
             }
+
+            // --- ホームページ ---
+            Action::OpenHomepage => self.action_open_homepage(),
 
             // --- シェル統合 ---
             Action::RegisterShell => {
