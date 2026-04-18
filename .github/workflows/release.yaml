@@ -8,9 +8,10 @@ on:
         required: true
         type: choice
         options:
-          - バグフィックス
-          - マイナーバージョンアップ
-          - メジャーバージョンアップ
+          - PATCH
+          - MINOR
+          - MAJOR
+        default: PATCH
 
 permissions:
   contents: write
@@ -97,9 +98,9 @@ jobs:
 
           $bump = "${{ inputs.bump }}"
           switch ($bump) {
-            'バグフィックス'             { $patch++ }
-            'マイナーバージョンアップ'   { $minor++; $patch = 0 }
-            'メジャーバージョンアップ'   { $major++; $minor = 0; $patch = 0 }
+            'PATCH' { $patch++ }
+            'MINOR' { $minor++; $patch = 0 }
+            'MAJOR' { $major++; $minor = 0; $patch = 0 }
           }
 
           $newVersion = "$major.$minor.$patch"

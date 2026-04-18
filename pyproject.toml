@@ -3,12 +3,8 @@ exclude-newer = "1 day"
 
 [tool.pyfltr]
 preset = "latest"
-python = false
+rust = true
 js-runner = "pnpm"
-cargo-fmt = true
-cargo-clippy = true
-cargo-test = true
-cargo-deny = true
 prettier = true
 
 extend-exclude = [
