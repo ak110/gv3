@@ -295,38 +295,6 @@ fn launch_batch(batch_path: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-/// UTF-8文字列をシステムのANSIコードページ (日本語環境ではCP932) に変換する
-#[allow(dead_code)] // バッチはUTF-8 BOM方式に移行したが、将来のCP932出力で使用する可能性あり
-fn utf8_to_ansi(s: &str) -> Vec<u8> {
-    use windows::Win32::Globalization::{CP_ACP, WideCharToMultiByte};
-
-    let wide: Vec<u16> = s.encode_utf16().collect();
-    if wide.is_empty() {
-        return Vec::new();
-    }
-
-    unsafe {
-        let len = WideCharToMultiByte(CP_ACP, Default::default(), &wide, None, None, None);
-        if len == 0 {
-            return s.as_bytes().to_vec();
-        }
-        let mut buf = vec![0u8; len as usize];
-        WideCharToMultiByte(
-            CP_ACP,
-            Default::default(),
-            &wide,
-            Some(&mut buf),
-            None,
-            None,
-        );
-        // null終端が含まれていれば除去
-        if buf.last() == Some(&0) {
-            buf.pop();
-        }
-        buf
-    }
-}
-
 /// バージョン文字列を (major, minor, patch) タプルに変換
 fn parse_version(s: &str) -> Option<(u32, u32, u32)> {
     let s = s.strip_prefix('v').unwrap_or(s);

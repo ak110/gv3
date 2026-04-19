@@ -3,52 +3,14 @@
 use crate::image::DecodedImage;
 use crate::selection::PixelRect;
 
-/// 選択領域内のピクセルに変換関数を適用する (選択なしなら全画像)
-fn apply_to_region(
-    image: &DecodedImage,
-    region: Option<&PixelRect>,
-    f: impl Fn(u8, u8, u8, u8) -> [u8; 4],
-) -> DecodedImage {
-    let mut data = image.data.clone();
-    let w = image.width as i32;
-    let h = image.height as i32;
-
-    let (x0, y0, x1, y1) = if let Some(r) = region {
-        let r = r.clamped(image.width, image.height);
-        (r.x, r.y, r.right(), r.bottom())
-    } else {
-        (0, 0, w, h)
-    };
-
-    for y in y0..y1 {
-        for x in x0..x1 {
-            let offset = ((y * w + x) * 4) as usize;
-            let [r, g, b, a] = [
-                data[offset],
-                data[offset + 1],
-                data[offset + 2],
-                data[offset + 3],
-            ];
-            let result = f(r, g, b, a);
-            data[offset..offset + 4].copy_from_slice(&result);
-        }
-    }
-
-    DecodedImage {
-        data,
-        width: image.width,
-        height: image.height,
-    }
-}
-
 /// 色を反転
 pub fn invert_colors(image: &DecodedImage, region: Option<&PixelRect>) -> DecodedImage {
-    apply_to_region(image, region, |r, g, b, a| [255 - r, 255 - g, 255 - b, a])
+    super::apply_to_region(image, region, |r, g, b, a| [255 - r, 255 - g, 255 - b, a])
 }
 
 /// 簡易グレースケール化 (R,G,Bの平均)
 pub fn grayscale_simple(image: &DecodedImage, region: Option<&PixelRect>) -> DecodedImage {
-    apply_to_region(image, region, |r, g, b, a| {
+    super::apply_to_region(image, region, |r, g, b, a| {
         let gray = ((r as u16 + g as u16 + b as u16) / 3) as u8;
         [gray, gray, gray, a]
     })
@@ -56,7 +18,7 @@ pub fn grayscale_simple(image: &DecodedImage, region: Option<&PixelRect>) -> Dec
 
 /// 厳密グレースケール化 (ITU-R BT.709 輝度)
 pub fn grayscale_strict(image: &DecodedImage, region: Option<&PixelRect>) -> DecodedImage {
-    apply_to_region(image, region, |r, g, b, a| {
+    super::apply_to_region(image, region, |r, g, b, a| {
         let gray = (0.2126 * r as f32 + 0.7152 * g as f32 + 0.0722 * b as f32).round() as u8;
         [gray, gray, gray, a]
     })
@@ -64,12 +26,12 @@ pub fn grayscale_strict(image: &DecodedImage, region: Option<&PixelRect>) -> Dec
 
 /// 塗り潰し (指定色で領域を塗り潰す)
 pub fn fill(image: &DecodedImage, region: Option<&PixelRect>, r: u8, g: u8, b: u8) -> DecodedImage {
-    apply_to_region(image, region, |_r, _g, _b, a| [r, g, b, a])
+    super::apply_to_region(image, region, |_r, _g, _b, a| [r, g, b, a])
 }
 
 /// αチャンネルをRGBに反映して不透明にする (白背景合成)
 pub fn apply_alpha(image: &DecodedImage, region: Option<&PixelRect>) -> DecodedImage {
-    apply_to_region(image, region, |r, g, b, a| {
+    super::apply_to_region(image, region, |r, g, b, a| {
         let af = a as f32 / 255.0;
         let blend = |c: u8| (c as f32 * af + 255.0 * (1.0 - af)).round() as u8;
         [blend(r), blend(g), blend(b), 255]

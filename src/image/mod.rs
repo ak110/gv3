@@ -21,10 +21,6 @@ impl DecodedImage {
 
 /// 画像メタデータ (document.rs::current_metadata() で構築・返却される)
 pub struct ImageMetadata {
-    #[allow(dead_code)] // デコーダが設定。将来の画像情報表示拡張で使用予定
-    pub width: u32,
-    #[allow(dead_code)] // デコーダが設定。将来の画像情報表示拡張で使用予定
-    pub height: u32,
     pub format: String,
     pub comments: Vec<String>,
     /// EXIFメタデータ (キー, フォーマット済み値)
@@ -33,10 +29,6 @@ pub struct ImageMetadata {
 
 /// 画像デコーダの共通インターフェース (DecoderChain経由でdyn dispatch)
 pub trait ImageDecoder: Send + Sync {
-    /// 対応する拡張子のリスト (ドット付き小文字、例: ".jpg")
-    #[allow(dead_code)] // 具象型から呼ばれるが、dyn dispatch経由の呼び出しがないため警告される
-    fn supported_extensions(&self) -> Vec<String>;
-
     /// バイト列からデコード可能か判定
     /// `filename_hint`はSusieプラグインの`IsSupported`で使用
     fn can_decode(&self, data: &[u8], filename_hint: &str) -> bool;

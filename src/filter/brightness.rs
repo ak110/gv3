@@ -9,7 +9,7 @@ pub fn levels(image: &DecodedImage, region: Option<&PixelRect>, low: u8, high: u
     let high = high.max(1) as f32;
     let range = (high - low).max(1.0);
 
-    apply_to_region(image, region, |r, g, b, a| {
+    super::apply_to_region(image, region, |r, g, b, a| {
         let map =
             |v: u8| -> u8 { ((v as f32 - low) / range * 255.0).round().clamp(0.0, 255.0) as u8 };
         [map(r), map(g), map(b), a]
@@ -26,7 +26,7 @@ pub fn gamma(image: &DecodedImage, region: Option<&PixelRect>, gamma_value: f64)
         *entry = ((i as f64 / 255.0).powf(inv_gamma) * 255.0).round() as u8;
     }
 
-    apply_to_region(image, region, |r, g, b, a| {
+    super::apply_to_region(image, region, |r, g, b, a| {
         [lut[r as usize], lut[g as usize], lut[b as usize], a]
     })
 }
@@ -56,47 +56,9 @@ pub fn brightness_contrast(
         *entry = v.round().clamp(0.0, 255.0) as u8;
     }
 
-    apply_to_region(image, region, |r, g, b, a| {
+    super::apply_to_region(image, region, |r, g, b, a| {
         [lut[r as usize], lut[g as usize], lut[b as usize], a]
     })
-}
-
-/// 選択領域内のピクセルに変換関数を適用する (選択なしなら全画像)
-fn apply_to_region(
-    image: &DecodedImage,
-    region: Option<&PixelRect>,
-    f: impl Fn(u8, u8, u8, u8) -> [u8; 4],
-) -> DecodedImage {
-    let mut data = image.data.clone();
-    let w = image.width as i32;
-    let h = image.height as i32;
-
-    let (x0, y0, x1, y1) = if let Some(r) = region {
-        let r = r.clamped(image.width, image.height);
-        (r.x, r.y, r.right(), r.bottom())
-    } else {
-        (0, 0, w, h)
-    };
-
-    for y in y0..y1 {
-        for x in x0..x1 {
-            let offset = ((y * w + x) * 4) as usize;
-            let [r, g, b, a] = [
-                data[offset],
-                data[offset + 1],
-                data[offset + 2],
-                data[offset + 3],
-            ];
-            let result = f(r, g, b, a);
-            data[offset..offset + 4].copy_from_slice(&result);
-        }
-    }
-
-    DecodedImage {
-        data,
-        width: image.width,
-        height: image.height,
-    }
 }
 
 #[cfg(test)]

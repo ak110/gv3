@@ -208,7 +208,9 @@ pub fn build_menu_bar() -> HMENU {
 
 /// Action からメニューIDを計算
 pub fn action_to_menu_id(action: Action) -> u16 {
-    WM_COMMAND_BASE + action as u16
+    use strum::IntoEnumIterator;
+    let index = Action::iter().position(|a| a == action).unwrap_or(0) as u16;
+    WM_COMMAND_BASE + index
 }
 
 /// メニュー項目の有効/無効を更新
@@ -279,144 +281,8 @@ unsafe fn append_popup(menu_bar: HMENU, popup: HMENU, label: &str) {
 
 use crate::util::to_wide;
 
-/// インデックスからActionを復元する (Action enumの discriminant を利用)
+/// インデックスからActionを復元する (strum::EnumIter を利用)
 fn action_from_index(index: u16) -> Option<Action> {
-    // Action enumの全バリアントを順番に対応付ける
-    let actions = ALL_ACTIONS;
-    actions.get(index as usize).copied()
+    use strum::IntoEnumIterator;
+    Action::iter().nth(index as usize)
 }
-
-/// 全Actionを列挙順に並べた配列 (Action enumのdiscriminantと一致させる)
-const ALL_ACTIONS: &[Action] = &[
-    // ナビゲーション
-    Action::NavigateBack,
-    Action::NavigateForward,
-    Action::Navigate1Back,
-    Action::Navigate1Forward,
-    Action::Navigate5Back,
-    Action::Navigate5Forward,
-    Action::Navigate50Back,
-    Action::Navigate50Forward,
-    Action::NavigateFirst,
-    Action::NavigateLast,
-    Action::NavigatePrevFolder,
-    Action::NavigateNextFolder,
-    Action::NavigatePrevMark,
-    Action::NavigateNextMark,
-    Action::NavigateToPage,
-    Action::SortNavigateBack,
-    Action::SortNavigateForward,
-    Action::ShuffleAll,
-    Action::ShuffleGroups,
-    // 表示モード
-    Action::DisplayAutoShrink,
-    Action::DisplayAutoFit,
-    Action::ZoomIn,
-    Action::ZoomOut,
-    Action::ZoomReset,
-    Action::ToggleMargin,
-    Action::CycleAlphaBackground,
-    // ウィンドウ
-    Action::ToggleFullscreen,
-    Action::Minimize,
-    Action::ToggleMaximize,
-    Action::ToggleAlwaysOnTop,
-    Action::ToggleCursorHide,
-    Action::ToggleMenuBar,
-    // ファイル操作
-    Action::NewWindow,
-    Action::OpenFile,
-    Action::OpenFolder,
-    Action::CloseAll,
-    Action::Reload,
-    Action::RemoveFromList,
-    Action::DeleteFile,
-    Action::MoveFile,
-    Action::CopyFile,
-    Action::OpenContainingFolder,
-    Action::CopyFileName,
-    Action::CopyImage,
-    Action::PasteImage,
-    Action::ExportJpg,
-    Action::ExportBmp,
-    Action::ExportPng,
-    Action::ShowImageInfo,
-    // マーク操作
-    Action::MarkSet,
-    Action::MarkUnset,
-    Action::MarkInvertAll,
-    Action::MarkInvertToHere,
-    Action::MarkedRemoveFromList,
-    Action::MarkedDelete,
-    Action::MarkedMove,
-    Action::MarkedCopy,
-    Action::MarkedCopyNames,
-    // 編集
-    Action::DeselectSelection,
-    Action::Crop,
-    Action::FlipHorizontal,
-    Action::FlipVertical,
-    Action::Rotate180,
-    Action::Rotate90CW,
-    Action::Rotate90CCW,
-    Action::RotateArbitrary,
-    Action::Resize,
-    // フィルタ (画像メニュー)
-    Action::Fill,
-    Action::Levels,
-    Action::Gamma,
-    Action::BrightnessContrast,
-    Action::Mosaic,
-    Action::GaussianBlur,
-    Action::UnsharpMask,
-    Action::InvertColors,
-    Action::GrayscaleSimple,
-    Action::GrayscaleStrict,
-    Action::ApplyAlpha,
-    Action::Blur,
-    Action::BlurStrong,
-    Action::Sharpen,
-    Action::SharpenStrong,
-    Action::MedianFilter,
-    // 永続フィルタ
-    Action::PFilterToggle,
-    Action::PFilterFlipH,
-    Action::PFilterFlipV,
-    Action::PFilterRotate180,
-    Action::PFilterRotate90CW,
-    Action::PFilterRotate90CCW,
-    Action::PFilterLevels,
-    Action::PFilterGamma,
-    Action::PFilterBrightnessContrast,
-    Action::PFilterGrayscaleSimple,
-    Action::PFilterGrayscaleStrict,
-    Action::PFilterBlur,
-    Action::PFilterBlurStrong,
-    Action::PFilterSharpen,
-    Action::PFilterSharpenStrong,
-    Action::PFilterGaussianBlur,
-    Action::PFilterUnsharpMask,
-    Action::PFilterMedianFilter,
-    Action::PFilterInvertColors,
-    Action::PFilterApplyAlpha,
-    // ブックマーク
-    Action::BookmarkSave,
-    Action::BookmarkLoad,
-    // ファイルリスト
-    Action::ToggleFileList,
-    // ユーティリティ
-    Action::OpenExeFolder,
-    Action::OpenBookmarkFolder,
-    Action::OpenSpiFolder,
-    Action::OpenTempFolder,
-    Action::ShowHelp,
-    Action::CheckUpdate,
-    Action::OpenHomepage,
-    Action::RegisterShell,
-    Action::UnregisterShell,
-    Action::Exit,
-    // スライドショー
-    Action::SlideshowToggle,
-    Action::SlideshowFaster,
-    Action::SlideshowSlower,
-];

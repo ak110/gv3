@@ -20,6 +20,26 @@ pub fn strip_extended_length_prefix(path: &Path) -> PathBuf {
     }
 }
 
+/// Win32 MessageBoxW のラッパー
+///
+/// # Safety
+/// hwnd は有効なウィンドウハンドル、または `HWND::default()`（NULLに相当）であること。
+pub unsafe fn show_message_box(
+    hwnd: windows::Win32::Foundation::HWND,
+    title: &str,
+    message: &str,
+    flags: windows::Win32::UI::WindowsAndMessaging::MESSAGEBOX_STYLE,
+) -> windows::Win32::UI::WindowsAndMessaging::MESSAGEBOX_RESULT {
+    unsafe {
+        windows::Win32::UI::WindowsAndMessaging::MessageBoxW(
+            Some(hwnd),
+            &windows::core::HSTRING::from(message),
+            &windows::core::HSTRING::from(title),
+            flags,
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

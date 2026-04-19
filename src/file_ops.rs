@@ -12,6 +12,9 @@ use windows::Win32::UI::Shell::{
 
 use crate::util::to_wide;
 
+/// IFileOperation がキャンセルされたことを示す HRESULT (HRESULT_FROM_WIN32(ERROR_CANCELLED))
+const ERROR_CANCELLED_HRESULT: u32 = 0x800704C7;
+
 /// IFileOperationによるファイル削除 (ごみ箱経由)
 pub fn delete_to_recycle_bin(hwnd: HWND, paths: &[&Path]) -> Result<bool> {
     if paths.is_empty() {
@@ -137,7 +140,7 @@ pub fn open_file_dialog(hwnd: HWND, initial_dir: Option<&Path>) -> Result<Option
 
         match dialog.Show(Some(hwnd)) {
             Ok(()) => {}
-            Err(e) if e.code().0 as u32 == 0x800704C7 => return Ok(None), // ユーザーキャンセル
+            Err(e) if e.code().0 as u32 == ERROR_CANCELLED_HRESULT => return Ok(None), // ユーザーキャンセル
             Err(e) => return Err(e.into()),
         }
 
@@ -183,7 +186,7 @@ pub fn select_folder_dialog(
 
         match dialog.Show(Some(hwnd)) {
             Ok(()) => {}
-            Err(e) if e.code().0 as u32 == 0x800704C7 => return Ok(None),
+            Err(e) if e.code().0 as u32 == ERROR_CANCELLED_HRESULT => return Ok(None),
             Err(e) => return Err(e.into()),
         }
 
@@ -277,7 +280,7 @@ pub fn save_file_dialog(hwnd: HWND, params: SaveFileDialogParams<'_>) -> Result<
 
         match dialog.Show(Some(hwnd)) {
             Ok(()) => {}
-            Err(e) if e.code().0 as u32 == 0x800704C7 => return Ok(None),
+            Err(e) if e.code().0 as u32 == ERROR_CANCELLED_HRESULT => return Ok(None),
             Err(e) => return Err(e.into()),
         }
 
@@ -329,7 +332,7 @@ pub fn open_bookmark_dialog(hwnd: HWND) -> Result<Option<PathBuf>> {
 
         match dialog.Show(Some(hwnd)) {
             Ok(()) => {}
-            Err(e) if e.code().0 as u32 == 0x800704C7 => return Ok(None),
+            Err(e) if e.code().0 as u32 == ERROR_CANCELLED_HRESULT => return Ok(None),
             Err(e) => return Err(e.into()),
         }
 

@@ -22,7 +22,7 @@ pub fn median_filter(image: &DecodedImage, region: Option<&PixelRect>) -> Decode
     let h_i = image.height as i32;
     let mut data = image.data.clone();
 
-    let (x0, y0, x1, y1) = region_bounds(region, image.width, image.height);
+    let (x0, y0, x1, y1) = super::region_bounds(region, image.width, image.height);
 
     for y in y0..y1 {
         for x in x0..x1 {
@@ -57,7 +57,7 @@ fn box_blur(image: &DecodedImage, region: Option<&PixelRect>, radius: i32) -> De
     let h_i = image.height as i32;
     let mut data = image.data.clone();
 
-    let (x0, y0, x1, y1) = region_bounds(region, image.width, image.height);
+    let (x0, y0, x1, y1) = super::region_bounds(region, image.width, image.height);
     let kernel_size = (2 * radius + 1) * (2 * radius + 1);
 
     for y in y0..y1 {
@@ -84,23 +84,13 @@ fn box_blur(image: &DecodedImage, region: Option<&PixelRect>, radius: i32) -> De
     }
 }
 
-/// 領域境界を計算
-fn region_bounds(region: Option<&PixelRect>, width: u32, height: u32) -> (i32, i32, i32, i32) {
-    if let Some(r) = region {
-        let r = r.clamped(width, height);
-        (r.x, r.y, r.right(), r.bottom())
-    } else {
-        (0, 0, width as i32, height as i32)
-    }
-}
-
 /// モザイク
 pub fn mosaic(image: &DecodedImage, region: Option<&PixelRect>, block_size: u32) -> DecodedImage {
     let block = block_size.max(1) as i32;
     let w_u = image.width as usize;
     let mut data = image.data.clone();
 
-    let (x0, y0, x1, y1) = region_bounds(region, image.width, image.height);
+    let (x0, y0, x1, y1) = super::region_bounds(region, image.width, image.height);
 
     // ブロック単位で処理
     let mut by = y0;
@@ -169,7 +159,7 @@ pub fn unsharp_mask(image: &DecodedImage, region: Option<&PixelRect>, radius: f6
     let w_u = image.width as usize;
     let mut data = image.data.clone();
 
-    let (x0, y0, x1, y1) = region_bounds(region, image.width, image.height);
+    let (x0, y0, x1, y1) = super::region_bounds(region, image.width, image.height);
 
     for y in y0..y1 {
         for x in x0..x1 {

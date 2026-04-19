@@ -3,31 +3,20 @@ use anyhow::Result;
 
 use crate::susie::plugin::SharedPlugin;
 
-use super::{DecodedImage, ImageDecoder, ImageMetadata};
+use super::{DecodedImage, ImageDecoder, ImageMetadata, read_exif_fields};
 
 /// Susie画像プラグインをImageDecoderとして使うアダプタ
 pub struct SusieImageDecoder {
     plugin: SharedPlugin,
-    /// キャッシュした拡張子リスト (supported_extensions() から参照)
-    #[allow(dead_code)] // dyn経由のsupported_extensions() 呼び出しがないため警告される
-    extensions: Vec<String>,
 }
 
 impl SusieImageDecoder {
     pub fn new(plugin: SharedPlugin) -> Self {
-        let extensions = plugin
-            .lock()
-            .expect("Susie plugin lock poisoned")
-            .supported_extensions();
-        Self { plugin, extensions }
+        Self { plugin }
     }
 }
 
 impl ImageDecoder for SusieImageDecoder {
-    fn supported_extensions(&self) -> Vec<String> {
-        self.extensions.clone()
-    }
-
     fn can_decode(&self, data: &[u8], filename_hint: &str) -> bool {
         let Ok(locked) = self.plugin.lock() else {
             return false;
@@ -43,14 +32,10 @@ impl ImageDecoder for SusieImageDecoder {
         locked.get_picture(data, filename_hint)
     }
 
-    fn metadata(&self, data: &[u8], filename_hint: &str) -> Result<ImageMetadata> {
-        // Susieプラグインにはメタデータ専用APIがないため、デコードして取得
-        let image = self.decode(data, filename_hint)?;
+    fn metadata(&self, data: &[u8], _filename_hint: &str) -> Result<ImageMetadata> {
         // EXIFメタデータ (Susie経由でもraw bytesからEXIFを読み取れる)
-        let exif = super::read_exif_fields(data);
+        let exif = read_exif_fields(data);
         Ok(ImageMetadata {
-            width: image.width,
-            height: image.height,
             format: format!(
                 "Susie ({})",
                 self.plugin

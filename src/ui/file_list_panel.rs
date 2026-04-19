@@ -273,11 +273,6 @@ impl FileListPanel {
         self.listview
     }
 
-    /// 後方互換: 旧 API 名 (app.rs から参照)
-    pub fn listbox_hwnd(&self) -> HWND {
-        self.listview
-    }
-
     /// 表示中かどうか
     pub fn is_visible(&self) -> bool {
         self.visible

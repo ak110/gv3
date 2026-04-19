@@ -173,7 +173,7 @@ impl AppWindow {
         let monospace_font = MonospaceFont::new(16);
         unsafe {
             let _ = SendMessageW(
-                file_list_panel.listbox_hwnd(),
+                file_list_panel.listview_hwnd(),
                 WM_SETFONT,
                 Some(WPARAM(monospace_font.hfont().0 as usize)),
                 Some(LPARAM(1)),
@@ -376,12 +376,12 @@ impl AppWindow {
             } else {
                 String::new()
             };
-            format!("{loading_prefix}{display}{page_info}{sel_info}{expand_info} - ぐらびゅ\0")
+            format!("{loading_prefix}{display}{page_info}{sel_info}{expand_info} - ぐらびゅ")
         } else {
-            concat!("ぐらびゅ v", env!("CARGO_PKG_VERSION"), "\0").to_string()
+            concat!("ぐらびゅ v", env!("CARGO_PKG_VERSION")).to_string()
         };
 
-        let wide: Vec<u16> = title.encode_utf16().collect();
+        let wide = crate::util::to_wide(title.trim_end_matches('\0'));
         unsafe {
             let _ = SetWindowTextW(self.hwnd, windows::core::PCWSTR(wide.as_ptr()));
         }
@@ -389,8 +389,8 @@ impl AppWindow {
 
     /// タイトルバーにエラーメッセージを表示する
     fn show_error_title(&self, msg: &str) {
-        let title = format!("ぐらびゅ - エラー: {msg}\0");
-        let wide: Vec<u16> = title.encode_utf16().collect();
+        let title = format!("ぐらびゅ - エラー: {msg}");
+        let wide = crate::util::to_wide(&title);
         unsafe {
             let _ = SetWindowTextW(self.hwnd, windows::core::PCWSTR(wide.as_ptr()));
         }
@@ -910,6 +910,22 @@ impl AppWindow {
         self.update_title();
     }
 
+    fn open_in_explorer_select(&mut self, path: &Path) {
+        let arg = format!("/select,{}", path.display());
+        if let Err(e) = std::process::Command::new("explorer.exe")
+            .raw_arg(&arg)
+            .spawn()
+        {
+            self.show_error_title(&format!("エクスプローラの起動に失敗しました: {e}"));
+        }
+    }
+
+    fn open_in_explorer(&mut self, path: &Path) {
+        if let Err(e) = std::process::Command::new("explorer.exe").arg(path).spawn() {
+            self.show_error_title(&format!("エクスプローラの起動に失敗しました: {e}"));
+        }
+    }
+
     fn action_open_containing_folder(&mut self) {
         if let Some(source) = self.document.current_source() {
             let target = match source {
@@ -920,22 +936,15 @@ impl AppWindow {
                 }
                 crate::file_info::FileSource::File(path) => path.clone(),
             };
-            let arg = format!("/select,{}", target.display());
-            if let Err(e) = std::process::Command::new("explorer.exe")
-                .raw_arg(&arg)
-                .spawn()
-            {
-                self.show_error_title(&format!("エクスプローラの起動に失敗しました: {e}"));
-            }
+            self.open_in_explorer_select(&target);
         }
     }
 
     fn action_open_exe_folder(&mut self) {
         if let Ok(exe) = std::env::current_exe()
             && let Some(dir) = exe.parent()
-            && let Err(e) = std::process::Command::new("explorer.exe").arg(dir).spawn()
         {
-            self.show_error_title(&format!("エクスプローラの起動に失敗しました: {e}"));
+            self.open_in_explorer(dir);
         }
     }
 
@@ -949,9 +958,7 @@ impl AppWindow {
                 dir.display()
             );
         }
-        if let Err(e) = std::process::Command::new("explorer.exe").arg(&dir).spawn() {
-            self.show_error_title(&format!("エクスプローラの起動に失敗しました: {e}"));
-        }
+        self.open_in_explorer(&dir);
     }
 
     fn action_open_spi_folder(&mut self) {
@@ -965,20 +972,13 @@ impl AppWindow {
                     spi_dir.display()
                 );
             }
-            if let Err(e) = std::process::Command::new("explorer.exe")
-                .arg(&spi_dir)
-                .spawn()
-            {
-                self.show_error_title(&format!("エクスプローラの起動に失敗しました: {e}"));
-            }
+            self.open_in_explorer(&spi_dir);
         }
     }
 
     fn action_open_temp_folder(&mut self) {
         let dir = std::env::temp_dir();
-        if let Err(e) = std::process::Command::new("explorer.exe").arg(&dir).spawn() {
-            self.show_error_title(&format!("エクスプローラの起動に失敗しました: {e}"));
-        }
+        self.open_in_explorer(&dir);
     }
 
     fn action_open_homepage(&mut self) {
@@ -1142,8 +1142,6 @@ impl AppWindow {
             // --- ナビゲーション ---
             Action::NavigateBack => self.navigate_with_guard(|d| d.navigate_relative(-1)),
             Action::NavigateForward => self.navigate_with_guard(|d| d.navigate_relative(1)),
-            Action::Navigate1Back => self.navigate_with_guard(|d| d.navigate_relative(-1)),
-            Action::Navigate1Forward => self.navigate_with_guard(|d| d.navigate_relative(1)),
             Action::Navigate5Back => self.navigate_with_guard(|d| d.navigate_relative(-5)),
             Action::Navigate5Forward => self.navigate_with_guard(|d| d.navigate_relative(5)),
             Action::Navigate50Back => self.navigate_with_guard(|d| d.navigate_relative(-50)),
@@ -1702,47 +1700,31 @@ Susieプラグイン (.sph/.spi) で拡張可能";
         }
 
         match result {
-            Err(e) => {
-                let msg = format!("更新の確認に失敗しました:\n{e}\0");
-                let title = "アップデート確認\0";
-                let wide_msg: Vec<u16> = msg.encode_utf16().collect();
-                let wide_title: Vec<u16> = title.encode_utf16().collect();
-                unsafe {
-                    MessageBoxW(
-                        Some(self.hwnd),
-                        windows::core::PCWSTR(wide_msg.as_ptr()),
-                        windows::core::PCWSTR(wide_title.as_ptr()),
-                        MB_OK | MB_ICONERROR,
-                    );
-                }
-            }
-            Ok(info) if !info.is_newer => {
-                let msg = format!("最新バージョンです (v{})\0", info.current_version);
-                let title = "アップデート確認\0";
-                let wide_msg: Vec<u16> = msg.encode_utf16().collect();
-                let wide_title: Vec<u16> = title.encode_utf16().collect();
-                unsafe {
-                    MessageBoxW(
-                        Some(self.hwnd),
-                        windows::core::PCWSTR(wide_msg.as_ptr()),
-                        windows::core::PCWSTR(wide_title.as_ptr()),
-                        MB_OK | MB_ICONINFORMATION,
-                    );
-                }
-            }
-            Ok(info) => {
-                let msg = format!(
-                    "v{} が利用可能です (現在: v{})。\n更新しますか？\0",
-                    info.latest_version, info.current_version
+            Err(e) => unsafe {
+                crate::util::show_message_box(
+                    self.hwnd,
+                    "アップデート確認",
+                    &format!("更新の確認に失敗しました:\n{e}"),
+                    MB_OK | MB_ICONERROR,
                 );
-                let title = "アップデート確認\0";
-                let wide_msg: Vec<u16> = msg.encode_utf16().collect();
-                let wide_title: Vec<u16> = title.encode_utf16().collect();
+            },
+            Ok(info) if !info.is_newer => unsafe {
+                crate::util::show_message_box(
+                    self.hwnd,
+                    "アップデート確認",
+                    &format!("最新バージョンです (v{})", info.current_version),
+                    MB_OK | MB_ICONINFORMATION,
+                );
+            },
+            Ok(info) => {
                 let answer = unsafe {
-                    MessageBoxW(
-                        Some(self.hwnd),
-                        windows::core::PCWSTR(wide_msg.as_ptr()),
-                        windows::core::PCWSTR(wide_title.as_ptr()),
+                    crate::util::show_message_box(
+                        self.hwnd,
+                        "アップデート確認",
+                        &format!(
+                            "v{} が利用可能です (現在: v{})。\n更新しますか？",
+                            info.latest_version, info.current_version
+                        ),
                         MB_YESNO | MB_ICONQUESTION,
                     )
                 };
@@ -1766,15 +1748,11 @@ Susieプラグイン (.sph/.spi) で拡張可能";
                             unsafe {
                                 let _ = SetCursor(Some(prev));
                             }
-                            let msg = format!("更新に失敗しました:\n{e:?}\0");
-                            let title = "アップデート\0";
-                            let wide_msg: Vec<u16> = msg.encode_utf16().collect();
-                            let wide_title: Vec<u16> = title.encode_utf16().collect();
                             unsafe {
-                                MessageBoxW(
-                                    Some(self.hwnd),
-                                    windows::core::PCWSTR(wide_msg.as_ptr()),
-                                    windows::core::PCWSTR(wide_title.as_ptr()),
+                                crate::util::show_message_box(
+                                    self.hwnd,
+                                    "アップデート",
+                                    &format!("更新に失敗しました:\n{e:?}"),
                                     MB_OK | MB_ICONERROR,
                                 );
                             }
@@ -1787,15 +1765,11 @@ Susieプラグイン (.sph/.spi) で拡張可能";
 
     /// シェル統合 (ファイル関連付け・コンテキストメニュー・「送る」) を登録
     fn action_register_shell(&self) {
-        let msg = "ファイル関連付け・コンテキストメニュー・「送る」を登録しますか？\0";
-        let title = "シェル統合\0";
-        let wide_msg: Vec<u16> = msg.encode_utf16().collect();
-        let wide_title: Vec<u16> = title.encode_utf16().collect();
         let answer = unsafe {
-            MessageBoxW(
-                Some(self.hwnd),
-                windows::core::PCWSTR(wide_msg.as_ptr()),
-                windows::core::PCWSTR(wide_title.as_ptr()),
+            crate::util::show_message_box(
+                self.hwnd,
+                "シェル統合",
+                "ファイル関連付け・コンテキストメニュー・「送る」を登録しますか？",
                 MB_YESNO | MB_ICONQUESTION,
             )
         };
@@ -1804,44 +1778,32 @@ Susieプラグイン (.sph/.spi) で拡張可能";
         }
 
         match crate::shell::register_all() {
-            Ok(()) => {
-                let msg = "シェル統合を登録しました。\0";
-                let wide_msg: Vec<u16> = msg.encode_utf16().collect();
-                unsafe {
-                    MessageBoxW(
-                        Some(self.hwnd),
-                        windows::core::PCWSTR(wide_msg.as_ptr()),
-                        windows::core::PCWSTR(wide_title.as_ptr()),
-                        MB_OK | MB_ICONINFORMATION,
-                    );
-                }
-            }
-            Err(e) => {
-                let msg = format!("シェル統合の登録に失敗しました:\n{e}\0");
-                let wide_msg: Vec<u16> = msg.encode_utf16().collect();
-                unsafe {
-                    MessageBoxW(
-                        Some(self.hwnd),
-                        windows::core::PCWSTR(wide_msg.as_ptr()),
-                        windows::core::PCWSTR(wide_title.as_ptr()),
-                        MB_OK | MB_ICONERROR,
-                    );
-                }
-            }
+            Ok(()) => unsafe {
+                crate::util::show_message_box(
+                    self.hwnd,
+                    "シェル統合",
+                    "シェル統合を登録しました。",
+                    MB_OK | MB_ICONINFORMATION,
+                );
+            },
+            Err(e) => unsafe {
+                crate::util::show_message_box(
+                    self.hwnd,
+                    "シェル統合",
+                    &format!("シェル統合の登録に失敗しました:\n{e}"),
+                    MB_OK | MB_ICONERROR,
+                );
+            },
         }
     }
 
     /// シェル統合 (ファイル関連付け・コンテキストメニュー・「送る」) を解除
     fn action_unregister_shell(&self) {
-        let msg = "ファイル関連付け・コンテキストメニュー・「送る」を解除しますか？\0";
-        let title = "シェル統合\0";
-        let wide_msg: Vec<u16> = msg.encode_utf16().collect();
-        let wide_title: Vec<u16> = title.encode_utf16().collect();
         let answer = unsafe {
-            MessageBoxW(
-                Some(self.hwnd),
-                windows::core::PCWSTR(wide_msg.as_ptr()),
-                windows::core::PCWSTR(wide_title.as_ptr()),
+            crate::util::show_message_box(
+                self.hwnd,
+                "シェル統合",
+                "ファイル関連付け・コンテキストメニュー・「送る」を解除しますか？",
                 MB_YESNO | MB_ICONQUESTION,
             )
         };
@@ -1850,30 +1812,22 @@ Susieプラグイン (.sph/.spi) で拡張可能";
         }
 
         match crate::shell::unregister_all() {
-            Ok(()) => {
-                let msg = "シェル統合を解除しました。\0";
-                let wide_msg: Vec<u16> = msg.encode_utf16().collect();
-                unsafe {
-                    MessageBoxW(
-                        Some(self.hwnd),
-                        windows::core::PCWSTR(wide_msg.as_ptr()),
-                        windows::core::PCWSTR(wide_title.as_ptr()),
-                        MB_OK | MB_ICONINFORMATION,
-                    );
-                }
-            }
-            Err(e) => {
-                let msg = format!("シェル統合の解除に失敗しました:\n{e}\0");
-                let wide_msg: Vec<u16> = msg.encode_utf16().collect();
-                unsafe {
-                    MessageBoxW(
-                        Some(self.hwnd),
-                        windows::core::PCWSTR(wide_msg.as_ptr()),
-                        windows::core::PCWSTR(wide_title.as_ptr()),
-                        MB_OK | MB_ICONERROR,
-                    );
-                }
-            }
+            Ok(()) => unsafe {
+                crate::util::show_message_box(
+                    self.hwnd,
+                    "シェル統合",
+                    "シェル統合を解除しました。",
+                    MB_OK | MB_ICONINFORMATION,
+                );
+            },
+            Err(e) => unsafe {
+                crate::util::show_message_box(
+                    self.hwnd,
+                    "シェル統合",
+                    &format!("シェル統合の解除に失敗しました:\n{e}"),
+                    MB_OK | MB_ICONERROR,
+                );
+            },
         }
     }
 

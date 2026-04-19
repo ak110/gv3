@@ -14,13 +14,6 @@ impl StandardDecoder {
 }
 
 impl ImageDecoder for StandardDecoder {
-    fn supported_extensions(&self) -> Vec<String> {
-        [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"]
-            .iter()
-            .map(ToString::to_string)
-            .collect()
-    }
-
     fn can_decode(&self, data: &[u8], _filename_hint: &str) -> bool {
         image::guess_format(data).is_ok()
     }
@@ -41,9 +34,6 @@ impl ImageDecoder for StandardDecoder {
         let format =
             image::guess_format(data).map_or_else(|_| "Unknown".to_string(), |f| format!("{f:?}"));
 
-        // サイズ取得のためにデコード (ヘッダだけ読むAPIが限定的なため)
-        let img = image::load_from_memory(data).context("メタデータの取得に失敗")?;
-
         // PNGのテキストチャンク (tEXt/zTXt/iTXt) を取得
         let comments = if matches!(image::guess_format(data), Ok(image::ImageFormat::Png)) {
             Self::read_png_text_chunks(data)
@@ -55,8 +45,6 @@ impl ImageDecoder for StandardDecoder {
         let exif = super::read_exif_fields(data);
 
         Ok(ImageMetadata {
-            width: img.width(),
-            height: img.height(),
             format,
             comments,
             exif,
@@ -100,17 +88,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn supported_extensions_include_common_formats() {
-        let decoder = StandardDecoder::new();
-        let exts = decoder.supported_extensions();
-        assert!(exts.contains(&".jpg".to_string()));
-        assert!(exts.contains(&".png".to_string()));
-        assert!(exts.contains(&".gif".to_string()));
-        assert!(exts.contains(&".bmp".to_string()));
-        assert!(exts.contains(&".webp".to_string()));
-    }
-
-    #[test]
     fn decode_invalid_data_returns_error() {
         let decoder = StandardDecoder::new();
         let result = decoder.decode(&[0, 1, 2, 3], "test.jpg");
@@ -142,8 +119,6 @@ mod tests {
         let png_data = create_1x1_white_png();
         let decoder = StandardDecoder::new();
         let meta = decoder.metadata(&png_data, "test.png").unwrap();
-        assert_eq!(meta.width, 1);
-        assert_eq!(meta.height, 1);
         assert!(meta.format.contains("Png"));
     }
 

@@ -46,13 +46,12 @@ pub enum InputChord {
 // --- Action enum ---
 
 /// 全操作を列挙するenum
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u16)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, strum::EnumIter)]
 pub enum Action {
     // --- ナビゲーション ---
     NavigateBack,
     NavigateForward,
-    Navigate1Back,
-    Navigate1Forward,
     Navigate5Back,
     Navigate5Forward,
     Navigate50Back,
@@ -267,10 +266,8 @@ impl KeyConfig {
         let mut m = HashMap::new();
 
         // [navigation] — ぐらびゅ.keys.default.toml と同順
-        bind(&mut m, "←, WheelUp, ↑", Action::NavigateBack);
-        bind(&mut m, "→, WheelDown, ↓", Action::NavigateForward);
-        bind(&mut m, "Shift+←", Action::Navigate1Back);
-        bind(&mut m, "Shift+→", Action::Navigate1Forward);
+        bind(&mut m, "←, WheelUp, ↑, Shift+←", Action::NavigateBack);
+        bind(&mut m, "→, WheelDown, ↓, Shift+→", Action::NavigateForward);
         bind(&mut m, "PageUp", Action::Navigate5Back);
         bind(&mut m, "PageDown", Action::Navigate5Forward);
         bind(&mut m, "Ctrl+PageUp", Action::Navigate50Back);
@@ -525,10 +522,11 @@ const KEY_NAMES: &[(&str, u16)] = &[
 fn field_to_action(field: &str) -> Option<Action> {
     Some(match field {
         // ナビゲーション
-        "back" | "navigate_back" => Action::NavigateBack,
-        "forward" | "navigate_forward" => Action::NavigateForward,
-        "page_back" | "navigate_1_back" => Action::Navigate1Back,
-        "page_forward" | "navigate_1_forward" => Action::Navigate1Forward,
+        // "page_back"/"navigate_1_back" 等は既存設定ファイルとの互換性のためNavigateBackにマップ
+        "back" | "navigate_back" | "page_back" | "navigate_1_back" => Action::NavigateBack,
+        "forward" | "navigate_forward" | "page_forward" | "navigate_1_forward" => {
+            Action::NavigateForward
+        }
         "navigate_5_back" => Action::Navigate5Back,
         "navigate_5_forward" => Action::Navigate5Forward,
         "navigate_50_back" => Action::Navigate50Back,

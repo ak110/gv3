@@ -7,7 +7,6 @@ use std::sync::Once;
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::{COLOR_BTNFACE, HFONT, UpdateWindow};
-use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 /// ダイアログの内部状態
@@ -131,23 +130,7 @@ pub fn show_info_dialog(parent: HWND, title: &str, text: &str, font: HFONT) {
         let _ = UpdateWindow(hwnd);
 
         // モーダルループ (data.closedはWndProc内でポインタ経由で変更される)
-        let _ = EnableWindow(parent, false);
-        let mut msg = MSG::default();
-        #[allow(clippy::while_immutable_condition)]
-        while !data.closed {
-            let ret = GetMessageW(std::ptr::from_mut(&mut msg), None, 0, 0);
-            if !ret.as_bool() {
-                break;
-            }
-            // Tabキーナビゲーション対応
-            if IsDialogMessageW(hwnd, std::ptr::from_ref(&msg)).as_bool() {
-                continue;
-            }
-            let _ = TranslateMessage(std::ptr::from_ref(&msg));
-            DispatchMessageW(std::ptr::from_ref(&msg));
-        }
-        let _ = EnableWindow(parent, true);
-        let _ = SetForegroundWindow(parent);
+        super::dialog::run_modal_loop(parent, hwnd, &raw const data.closed);
 
         // ダイアログウィンドウが残っていれば破棄
         if IsWindow(Some(hwnd)).as_bool() {
@@ -167,6 +150,7 @@ unsafe extern "system" fn dialog_wnd_proc(
         match msg {
             WM_CREATE => {
                 // CREATESTRUCT.lpCreateParamsからDialogDataポインタを取得してGWLP_USERDATAに保存
+                // SAFETY: WM_CREATE の lparam は常に有効な CREATESTRUCTW へのポインタ。
                 let cs = &*(lparam.0 as *const CREATESTRUCTW);
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, cs.lpCreateParams as isize);
                 return LRESULT(0);
@@ -175,14 +159,14 @@ unsafe extern "system" fn dialog_wnd_proc(
                 let control_id = (wparam.0 as u32) & 0xFFFF;
                 // Esc(IsDialogMessageWがIDCANCEL=2に変換)
                 if control_id == 2 {
-                    if let Some(data) = get_dialog_data(hwnd) {
+                    if let Some(data) = super::dialog::get_window_data::<DialogData>(hwnd) {
                         data.closed = true;
                     }
                     return LRESULT(0);
                 }
             }
             WM_CLOSE => {
-                if let Some(data) = get_dialog_data(hwnd) {
+                if let Some(data) = super::dialog::get_window_data::<DialogData>(hwnd) {
                     data.closed = true;
                 }
                 return LRESULT(0);
@@ -190,13 +174,5 @@ unsafe extern "system" fn dialog_wnd_proc(
             _ => {}
         }
         DefWindowProcW(hwnd, msg, wparam, lparam)
-    }
-}
-
-/// GWLP_USERDATAからDialogDataを取得
-unsafe fn get_dialog_data(hwnd: HWND) -> Option<&'static mut DialogData> {
-    unsafe {
-        let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut DialogData;
-        if ptr.is_null() { None } else { Some(&mut *ptr) }
     }
 }

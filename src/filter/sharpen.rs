@@ -29,12 +29,7 @@ fn apply_kernel(
     let h = image.height as i32;
     let mut data = image.data.clone();
 
-    let (x0, y0, x1, y1) = if let Some(r) = region {
-        let r = r.clamped(image.width, image.height);
-        (r.x, r.y, r.right(), r.bottom())
-    } else {
-        (0, 0, w, h)
-    };
+    let (x0, y0, x1, y1) = super::region_bounds(region, image.width, image.height);
 
     for y in y0..y1 {
         for x in x0..x1 {

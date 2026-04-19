@@ -14,10 +14,8 @@
 #   複数割り当て: カンマ区切り (例: "Ctrl+Num -, Ctrl+WheelUp")
 
 [navigation]
-back = "←, ↑, WheelUp"
-forward = "→, ↓, WheelDown"
-navigate_1_back = "Shift+←"
-navigate_1_forward = "Shift+→"
+back = "←, ↑, WheelUp, Shift+←"
+forward = "→, ↓, WheelDown, Shift+→"
 navigate_5_back = "PageUp"
 navigate_5_forward = "PageDown"
 navigate_50_back = "Ctrl+PageUp"

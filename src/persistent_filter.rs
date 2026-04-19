@@ -61,11 +61,6 @@ impl PersistentFilter {
         self.generation += 1;
     }
 
-    #[allow(dead_code)] // 将来のキャッシュキー統合で使用予定
-    pub fn generation(&self) -> u64 {
-        self.generation
-    }
-
     #[cfg(test)]
     pub fn operations(&self) -> &[FilterOperation] {
         &self.operations
@@ -195,16 +190,6 @@ mod tests {
     }
 
     #[test]
-    fn generation_increments() {
-        let mut pf = PersistentFilter::new();
-        assert_eq!(pf.generation(), 0);
-        pf.toggle_enabled();
-        assert_eq!(pf.generation(), 1);
-        pf.add_operation(FilterOperation::Blur);
-        assert_eq!(pf.generation(), 2);
-    }
-
-    #[test]
     fn multiple_operations_chain() {
         let mut pf = PersistentFilter::new();
         pf.toggle_enabled();
@@ -225,7 +210,6 @@ mod tests {
         assert_eq!(pf.operations().len(), 2);
 
         pf.clear_operations(); // gen=4
-        assert_eq!(pf.generation(), 4);
         assert!(pf.operations().is_empty());
         // 有効だが操作なし → None
         assert!(pf.apply(&test_image()).is_none());

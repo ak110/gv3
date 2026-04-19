@@ -42,11 +42,7 @@ pub enum DocumentEvent {
     /// ファイルリスト変更
     FileListChanged,
     /// 表示位置変更
-    NavigationChanged {
-        index: usize,
-        #[allow(dead_code)] // イベント情報として保持 (将来のステータスバー表示等で使用予定)
-        count: usize,
-    },
+    NavigationChanged { index: usize },
     /// エラー通知
     Error(String),
 }
@@ -417,9 +413,8 @@ impl Document {
         self.open_containers(&[pdf_path.to_path_buf()])
     }
 
-    /// 複数コンテナ (アーカイブ/PDF混在) をまとめて開く
-    /// 最初のコンテナのみ即座に展開し、残りはプレースホルダとして登録後バックグラウンドで展開する。
-    pub fn open_containers(&mut self, paths: &[PathBuf]) -> Result<()> {
+    /// ドキュメント状態を初期化する (open_containers / open_multiple の共通前処理)
+    fn reset_document_state(&mut self) {
         self.cleanup_archive_temp();
         self.invalidate_cache();
         self.file_list.clear();
@@ -428,6 +423,12 @@ impl Document {
         self.cancel_expansion(); // 旧世代 rayon ジョブをキュー先頭で停止させる
         self.expand_rx = None; // 旧バックグラウンド展開を破棄
         self.expand_generation += 1;
+    }
+
+    /// 複数コンテナ (アーカイブ/PDF混在) をまとめて開く
+    /// 最初のコンテナのみ即座に展開し、残りはプレースホルダとして登録後バックグラウンドで展開する。
+    pub fn open_containers(&mut self, paths: &[PathBuf]) -> Result<()> {
+        self.reset_document_state();
 
         let errors = self.process_and_integrate_containers(paths);
 
@@ -458,14 +459,7 @@ impl Document {
 
     /// 複数パス (フォルダ・コンテナ・画像ファイル混在) をフラットに展開して開く
     pub fn open_multiple(&mut self, paths: &[PathBuf]) -> Result<()> {
-        self.cleanup_archive_temp();
-        self.invalidate_cache();
-        self.file_list.clear();
-        self.container_states.clear();
-        self.pending_navigation_intent = None;
-        self.cancel_expansion();
-        self.expand_rx = None;
-        self.expand_generation += 1;
+        self.reset_document_state();
 
         // D&D やシェルからの複数渡しは順序が選択順になるため、トップレベル入力を
         // 自然順に並べ替えて以降の push 順 (= FileList のグループ出現順) を安定化する。
@@ -632,27 +626,15 @@ impl Document {
 
     /// ContainerResult をファイルリストに統合する
     fn integrate_container_result(&mut self, result: ContainerResult) {
+        // FileInfo 構築を build_container_entries に委譲する。
+        // 先に参照で entries を生成し、その後所有権フィールド (buffer, temp_dir) を分解して
+        // self への副作用を処理する。
+        let file_entries = Self::build_container_entries(&result);
         match result {
             ContainerResult::Error { .. } => {} // 呼び出し元で処理済み
             ContainerResult::Pdf { path, page_count } => {
                 if page_count == 0 {
                     return;
-                }
-                let pdf_file_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-                for i in 0..page_count {
-                    let info = crate::file_info::FileInfo {
-                        path: path.clone(),
-                        source: FileSource::PdfPage {
-                            pdf_path: path.clone(),
-                            page_index: i,
-                        },
-                        file_name: format!("Page {:03}", i + 1),
-                        file_size: pdf_file_size,
-                        modified: std::time::SystemTime::now(),
-                        marked: false,
-                        load_failed: false,
-                    };
-                    self.file_list.push(info);
                 }
                 self.container_states
                     .insert(path.clone(), ContainerState::Expanded);
@@ -665,22 +647,6 @@ impl Document {
             } => {
                 if entries.is_empty() {
                     return;
-                }
-                for entry in &entries {
-                    let info = crate::file_info::FileInfo {
-                        path: path.clone(),
-                        source: FileSource::ArchiveEntry {
-                            archive: path.clone(),
-                            entry: entry.entry_name.clone(),
-                            on_demand: true,
-                        },
-                        file_name: entry.file_name.clone(),
-                        file_size: entry.file_size,
-                        modified: std::time::SystemTime::now(),
-                        marked: false,
-                        load_failed: false,
-                    };
-                    self.file_list.push(info);
                 }
                 self.zip_buffers
                     .write()
@@ -701,24 +667,18 @@ impl Document {
                 self.archive_temp_dirs.push(temp_dir);
                 self.container_states
                     .insert(path.clone(), ContainerState::Expanded);
-                self.current_containers.push(path.clone());
-                for (temp_path, entry_name) in &entries {
-                    if let Ok(mut info) = crate::file_info::FileInfo::from_path(temp_path) {
-                        info.source = FileSource::ArchiveEntry {
-                            archive: path.clone(),
-                            entry: entry_name.clone(),
-                            on_demand: false,
-                        };
-                        info.file_name = crate::archive::extract_filename(entry_name).to_string();
-                        self.file_list.push(info);
-                    }
-                }
+                self.current_containers.push(path);
             }
+        }
+        for info in file_entries {
+            self.file_list.push(info);
         }
     }
 
-    /// ContainerResult からエントリのVecを生成する (展開結果の置換用)
-    fn entries_from_container_result(result: &ContainerResult) -> Vec<crate::file_info::FileInfo> {
+    /// ContainerResult からエントリの Vec を生成する共通ヘルパー
+    ///
+    /// Error バリアントは空の Vec を返す。呼び出し元で Error の判定・処理を行うこと。
+    fn build_container_entries(result: &ContainerResult) -> Vec<crate::file_info::FileInfo> {
         let mut entries = Vec::new();
         match result {
             ContainerResult::Error { .. } => {}
@@ -1030,7 +990,7 @@ impl Document {
                 anyhow::bail!("コンテナ展開失敗: {msg}");
             }
             result => {
-                let entries = Self::entries_from_container_result(&result);
+                let entries = Self::build_container_entries(&result);
 
                 // ZIPバッファやtemp_dirを保存
                 if let ContainerResult::Zip { path, buffer, .. } = result {
@@ -1258,10 +1218,9 @@ impl Document {
     /// NavigationChangedイベントを送信
     fn send_navigation_changed(&self) {
         if let Some(index) = self.file_list.current_index() {
-            let _ = self.event_sender.send(DocumentEvent::NavigationChanged {
-                index,
-                count: self.file_list.len(),
-            });
+            let _ = self
+                .event_sender
+                .send(DocumentEvent::NavigationChanged { index });
         }
     }
 
@@ -1604,10 +1563,8 @@ impl Document {
 
         // PDFページの場合はcurrent_imageからメタデータを生成
         if matches!(current.source, FileSource::PdfPage { .. }) {
-            return if let Some(img) = &self.current_image {
+            return if self.current_image.is_some() {
                 Ok(crate::image::ImageMetadata {
-                    width: img.width,
-                    height: img.height,
                     format: "PDF".to_string(),
                     comments: Vec::new(),
                     exif: Vec::new(),

@@ -1,4 +1,5 @@
 pub mod cursor_hider;
+pub mod dialog;
 pub mod file_list_panel;
 pub mod filter_dialog;
 pub mod font;
