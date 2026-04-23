@@ -1,6 +1,6 @@
 [package]
 name = "gv"
-version = "1.5.6"
+version = "1.5.7"
 edition = "2024"
 rust-version = "1.94"
 description = "Windows用の軽量画像ビューアー"
