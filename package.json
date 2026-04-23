@@ -10,7 +10,7 @@
     "lint:fix": "textlint --fix 'docs/**/*.md' README.md CLAUDE.md && markdownlint-cli2 --fix 'docs/**/*.md' README.md CLAUDE.md && prettier --write ."
   },
   "devDependencies": {
-    "markdownlint-cli2": "^0.22.0",
+    "markdownlint-cli2": "^0.22.1",
     "prettier": "^3.8.3",
     "textlint": "^15.5.4",
     "textlint-rule-ja-no-abusage": "^3.0.0",
