@@ -102,6 +102,54 @@ fn sort_paths_natural(paths: &mut [PathBuf]) {
     });
 }
 
+/// Windows のリパースポイント (シンボリックリンク・ジャンクション等) か判定する。
+/// `FileType::is_symlink()` はジャンクションを確実に識別できないため、
+/// `MetadataExt::file_attributes()` で `FILE_ATTRIBUTE_REPARSE_POINT` ビットを直接検査する。
+fn is_reparse_point(metadata: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+/// フォルダ配下を深さ優先で再帰走査し、走査対象ファイルパスをフラット列で返す。
+/// 各階層はファイル→サブディレクトリの順に並べ、階層内は `sort_paths_natural` で整える。
+/// この並びにより FileList 側の `group_key` によるサブフォルダ単位グループ化と
+/// 「親→子」のグループ出現順がそのまま機能する。
+/// シンボリックリンク・ジャンクション等のリパースポイントは追跡しない。
+fn collect_folder_files_recursive(folder: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    walk_folder_recursive(folder, &mut out);
+    out
+}
+
+fn walk_folder_recursive(folder: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(folder) else {
+        return;
+    };
+    let mut files: Vec<PathBuf> = Vec::new();
+    let mut subdirs: Vec<PathBuf> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if is_reparse_point(&meta) {
+            continue;
+        }
+        if meta.is_file() {
+            files.push(path);
+        } else if meta.is_dir() {
+            subdirs.push(path);
+        }
+    }
+    sort_paths_natural(&mut files);
+    sort_paths_natural(&mut subdirs);
+    out.extend(files);
+    for subdir in subdirs {
+        walk_folder_recursive(&subdir, out);
+    }
+}
+
 /// 単一コンテナを処理する (rayon workerから呼ばれる)
 fn process_single_container(path: &Path, archive_manager: &ArchiveManager) -> ContainerResult {
     if Document::is_pdf(path) {
@@ -457,56 +505,80 @@ impl Document {
         self.load_current()
     }
 
-    /// 複数パス (フォルダ・コンテナ・画像ファイル混在) をフラットに展開して開く
+    /// 複数パス (フォルダ・コンテナ・画像ファイル混在) をフラットに展開して開く。
+    /// フォルダ入力はサブフォルダまで深さ優先で再帰走査し、配下の画像・コンテナを一括で取り込む。
     pub fn open_multiple(&mut self, paths: &[PathBuf]) -> Result<()> {
         self.reset_document_state();
 
+        // トップレベル入力の正規化。リパースポイント (シンボリックリンク・ジャンクション) は
+        // `canonicalize()` での実体化前に除外し、再帰走査時の除外規則と一貫させる。
+        // 複数入力が同じ実体パスへ解決された場合は、先着を残して以降を捨てる (重複走査の回避)。
+        let mut canonical_inputs: Vec<PathBuf> = Vec::new();
+        for raw in paths {
+            if let Ok(meta) = std::fs::symlink_metadata(raw)
+                && is_reparse_point(&meta)
+            {
+                continue;
+            }
+            let canon = Self::canonicalize(raw)?;
+            if !canonical_inputs.contains(&canon) {
+                canonical_inputs.push(canon);
+            }
+        }
+
+        // 入れ子関係にある入力 (ある入力が別の入力の祖先ディレクトリ) は祖先のみ残して子孫を除外する。
+        // 親フォルダと配下サブフォルダを同時に受け取った際、再帰走査で子孫サブツリーが二重登録されるのを防ぐ。
+        let mut filtered_inputs: Vec<PathBuf> = Vec::new();
+        for path in &canonical_inputs {
+            let is_descendant = canonical_inputs
+                .iter()
+                .any(|other| other != path && path.starts_with(other));
+            if !is_descendant {
+                filtered_inputs.push(path.clone());
+            }
+        }
+
         // D&D やシェルからの複数渡しは順序が選択順になるため、トップレベル入力を
         // 自然順に並べ替えて以降の push 順 (= FileList のグループ出現順) を安定化する。
-        let mut inputs: Vec<PathBuf> = paths.to_vec();
-        sort_paths_natural(&mut inputs);
+        sort_paths_natural(&mut filtered_inputs);
 
-        // パスを分類しながら処理
-        let mut containers: Vec<PathBuf> = Vec::new();
+        // コンテナは出所別に2系統で保持する。
+        // - toplevel_containers: トップレベル入力が直接コンテナであるもの (最後に自然順ソート対象)
+        // - folder_containers:   フォルダ再帰走査で見つけたもの (走査順を保持する)
+        let mut toplevel_containers: Vec<PathBuf> = Vec::new();
+        let mut folder_containers: Vec<PathBuf> = Vec::new();
         let mut bookmarks: Vec<PathBuf> = Vec::new();
-        for path in &inputs {
-            let path = Self::canonicalize(path)?;
+        for path in &filtered_inputs {
             if path.is_dir() {
-                // フォルダ: 内部を走査し、画像は直接追加、コンテナ/ブックマークは収集
-                if let Ok(entries) = std::fs::read_dir(&path) {
-                    // read_dir の列挙順は規定されないため、自然順に整えてから処理する。
-                    let mut files: Vec<PathBuf> = entries
-                        .flatten()
-                        .map(|e| e.path())
-                        .filter(|p| p.is_file())
-                        .collect();
-                    sort_paths_natural(&mut files);
-                    for entry_path in files {
-                        if crate::bookmark::is_bookmark_file(&entry_path) {
-                            bookmarks.push(entry_path);
-                        } else if self.is_container(&entry_path) {
-                            containers.push(entry_path);
-                        } else if let Some(name) = entry_path.file_name().and_then(|n| n.to_str())
-                            && self.file_list.registry().is_image_extension(name)
-                            && let Ok(info) = crate::file_info::FileInfo::from_path(&entry_path)
-                        {
-                            self.file_list.push(info);
-                        }
+                // フォルダ: 再帰走査した全ファイルを振り分ける。
+                // 再帰ヘルパー内でリパースポイント除外と自然順整列を済ませており、
+                // 親階層のファイル→サブディレクトリの順に積まれている。
+                for entry_path in collect_folder_files_recursive(path) {
+                    if crate::bookmark::is_bookmark_file(&entry_path) {
+                        bookmarks.push(entry_path);
+                    } else if self.is_container(&entry_path) {
+                        folder_containers.push(entry_path);
+                    } else if let Some(name) = entry_path.file_name().and_then(|n| n.to_str())
+                        && self.file_list.registry().is_image_extension(name)
+                        && let Ok(info) = crate::file_info::FileInfo::from_path(&entry_path)
+                    {
+                        self.file_list.push(info);
                     }
                 }
-            } else if crate::bookmark::is_bookmark_file(&path) {
-                bookmarks.push(path);
-            } else if self.is_container(&path) {
-                containers.push(path);
+            } else if crate::bookmark::is_bookmark_file(path) {
+                bookmarks.push(path.clone());
+            } else if self.is_container(path) {
+                toplevel_containers.push(path.clone());
             } else if let Some(name) = path.file_name().and_then(|n| n.to_str())
                 && self.file_list.registry().is_image_extension(name)
-                && let Ok(info) = crate::file_info::FileInfo::from_path(&path)
+                && let Ok(info) = crate::file_info::FileInfo::from_path(path)
             {
                 self.file_list.push(info);
             }
         }
 
-        // ブックマークからエントリを展開して file_list / containers に振り分ける
+        // ブックマークからエントリを展開して file_list / コンテナ群に振り分ける。
+        // ブックマーク経由で得たコンテナはトップレベル相当として扱い、自然順ソート対象に含める。
         for bm_path in &bookmarks {
             let is_archive = |p: &Path| self.archive_manager.is_archive(p);
             if let Ok(data) = crate::bookmark::load_bookmark_from_path(bm_path, &is_archive) {
@@ -520,14 +592,16 @@ impl Document {
                             }
                         }
                         FileSource::ArchiveEntry { archive, .. }
-                            if !containers.contains(&archive) =>
+                            if !toplevel_containers.contains(&archive)
+                                && !folder_containers.contains(&archive) =>
                         {
-                            containers.push(archive);
+                            toplevel_containers.push(archive);
                         }
                         FileSource::PendingContainer { container_path }
-                            if !containers.contains(&container_path) =>
+                            if !toplevel_containers.contains(&container_path)
+                                && !folder_containers.contains(&container_path) =>
                         {
-                            containers.push(container_path);
+                            toplevel_containers.push(container_path);
                         }
                         _ => {}
                     }
@@ -535,10 +609,13 @@ impl Document {
             }
         }
 
-        // 即時展開対象 (containers[0]) と PendingContainer の push 順を安定化する。
+        // トップレベル入力由来のコンテナ群のみ自然順ソートし、D&D 選択順を安定化する。
         // process_and_integrate_containers は先頭を即展開するため、ここでの並び順が
         // FileList のグループ出現順 = 最終的な表示順序を左右する。
-        sort_paths_natural(&mut containers);
+        // フォルダ再帰由来は走査順 (親→子) を壊さないよう、ソートせずに末尾へ連結する。
+        sort_paths_natural(&mut toplevel_containers);
+        let mut containers: Vec<PathBuf> = toplevel_containers;
+        containers.extend(folder_containers);
 
         // コンテナを展開・統合
         let errors = self.process_and_integrate_containers(&containers);
@@ -2035,6 +2112,155 @@ mod tests {
             }
             other => panic!("先頭エントリがArchiveEntryではない: {other:?}"),
         }
+
+        cleanup_test_dir(&dir);
+    }
+
+    /// ファイル名 (最終コンポーネント) の等価比較ヘルパー。
+    fn file_name_eq(path: &Path, expected: &str) -> bool {
+        path.file_name() == Some(std::ffi::OsStr::new(expected))
+    }
+
+    #[test]
+    fn open_folder_recursive_enumerates_parent_and_subdir() {
+        // フォルダを開くとサブフォルダ内の画像・ZIP も再帰的に拾われる。
+        // グループ出現順は親→子となり、親直下のファイルがサブフォルダ内ファイルより前に並ぶ。
+        let dir = setup_test_dir("recursive_parent_child", 0);
+        let png_data = create_1x1_white_png();
+
+        // 親直下の画像
+        let parent_img = dir.join("parent.png");
+        std::fs::File::create(&parent_img)
+            .unwrap()
+            .write_all(&png_data)
+            .unwrap();
+
+        // サブフォルダ配下の画像と ZIP
+        let sub = dir.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        let sub_img = sub.join("inner.png");
+        std::fs::File::create(&sub_img)
+            .unwrap()
+            .write_all(&png_data)
+            .unwrap();
+        let sub_zip = sub.join("inner.zip");
+        create_test_zip(&sub_zip, 2);
+
+        let (mut doc, _rx) = test_document();
+        doc.open_folder(&dir).unwrap();
+        doc.expand_all_pending_sync();
+
+        // 期待: parent.png(1) + inner.png(1) + inner.zip 展開後の画像 2 エントリ = 計 4 エントリ
+        let files = doc.file_list().files();
+        assert_eq!(files.len(), 4, "再帰走査結果のエントリ数が不一致");
+
+        // 並び: 親 (parent.png) → サブ画像 (inner.png) → サブ ZIP 展開エントリ
+        assert!(
+            file_name_eq(&files[0].path, "parent.png"),
+            "先頭は親直下 parent.png であるべき: {:?}",
+            files[0].path
+        );
+        assert!(
+            file_name_eq(&files[1].path, "inner.png"),
+            "2番目はサブフォルダ内 inner.png であるべき: {:?}",
+            files[1].path
+        );
+        // 3番目以降は inner.zip 由来の ArchiveEntry
+        for (i, entry) in files.iter().enumerate().skip(2) {
+            match &entry.source {
+                FileSource::ArchiveEntry { archive, .. } => {
+                    assert!(
+                        file_name_eq(archive, "inner.zip"),
+                        "index={i} は inner.zip 由来のはず: {archive:?}"
+                    );
+                }
+                other => panic!("index={i} が ArchiveEntry ではない: {other:?}"),
+            }
+        }
+
+        cleanup_test_dir(&dir);
+    }
+
+    #[test]
+    fn open_multiple_nested_inputs_deduplicated() {
+        // 親フォルダと配下サブフォルダを同時にトップレベル入力として渡しても、
+        // 祖先側のみ採用されてサブフォルダ配下が二重登録されない。
+        let dir = setup_test_dir("nested_inputs_dedup", 0);
+        let sub = dir.join("child");
+        std::fs::create_dir_all(&sub).unwrap();
+        let png_data = create_1x1_white_png();
+        let sub_img = sub.join("x.png");
+        std::fs::File::create(&sub_img)
+            .unwrap()
+            .write_all(&png_data)
+            .unwrap();
+
+        let (mut doc, _rx) = test_document();
+        // 親 dir と子 sub を同時に渡す
+        doc.open_multiple(&[dir.clone(), sub.clone()]).unwrap();
+
+        // 子サブフォルダ配下の画像は再帰経由で 1 回だけ登録される
+        let files = doc.file_list().files();
+        assert_eq!(files.len(), 1, "二重登録されている");
+        assert!(file_name_eq(&files[0].path, "x.png"));
+
+        cleanup_test_dir(&dir);
+    }
+
+    #[test]
+    fn open_multiple_folder_recursion_preserves_walk_order() {
+        // フォルダ再帰で見つかった ZIP はグローバル自然順ソート対象から外れ、
+        // 親→子 + 階層内自然順の走査順を保つ。
+        // 一方、トップレベル入力が直接コンテナである場合は従来通り自然順にソートされる。
+        //
+        // 構成:
+        //   dir/folder_in/sub_x/z.zip  (walk 順: 先に列挙)
+        //   dir/folder_in/sub_y/a.zip  (walk 順: 後に列挙)
+        //   dir/zz_toplevel.zip        (トップレベル直接指定、自然順ソート対象)
+        // 期待: toplevel_containers = [zz_toplevel.zip]
+        //       folder_containers   = [z.zip, a.zip]  ← walk 順を保持 (自然順 [a, z] とは異なる)
+        //       結合後の containers = [zz_toplevel.zip, z.zip, a.zip]
+        //       FileList の先頭は即時展開された zz_toplevel.zip 由来。
+        let dir = setup_test_dir("toplevel_vs_folder_order", 0);
+        let folder_in = dir.join("folder_in");
+        let sub_x = folder_in.join("sub_x");
+        let sub_y = folder_in.join("sub_y");
+        std::fs::create_dir_all(&sub_x).unwrap();
+        std::fs::create_dir_all(&sub_y).unwrap();
+        let z_in_x = sub_x.join("z.zip");
+        let a_in_y = sub_y.join("a.zip");
+        create_test_zip(&z_in_x, 1);
+        create_test_zip(&a_in_y, 1);
+        let toplevel_zip = dir.join("zz_toplevel.zip");
+        create_test_zip(&toplevel_zip, 1);
+
+        let (mut doc, _rx) = test_document();
+        doc.open_multiple(&[folder_in.clone(), toplevel_zip.clone()])
+            .unwrap();
+        doc.expand_all_pending_sync();
+
+        let files = doc.file_list().files();
+        assert_eq!(files.len(), 3, "3つの ZIP から各1エントリずつ");
+
+        // 並びは [zz_toplevel.zip, z.zip, a.zip] の順
+        let names: Vec<&std::ffi::OsStr> = files
+            .iter()
+            .map(|f| match &f.source {
+                FileSource::ArchiveEntry { archive, .. } => {
+                    archive.file_name().expect("archive に file_name がない")
+                }
+                other => panic!("ArchiveEntry ではない: {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                std::ffi::OsStr::new("zz_toplevel.zip"),
+                std::ffi::OsStr::new("z.zip"),
+                std::ffi::OsStr::new("a.zip"),
+            ],
+            "トップレベルは自然順、フォルダ再帰由来は走査順を維持すべき"
+        );
 
         cleanup_test_dir(&dir);
     }
