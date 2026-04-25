@@ -2208,19 +2208,17 @@ mod tests {
     }
 
     #[test]
-    fn open_multiple_folder_recursion_preserves_walk_order() {
-        // フォルダ再帰で見つかった ZIP はグローバル自然順ソート対象から外れ、
-        // 親→子 + 階層内自然順の走査順を保つ。
-        // 一方、トップレベル入力が直接コンテナである場合は従来通り自然順にソートされる。
+    fn open_multiple_orders_archives_by_logical_path() {
+        // 論理パス順ソートにより、FileList はトップレベル入力由来かフォルダ再帰由来かに関わらず
+        // アーカイブパスのフルパス順で並ぶ。
         //
         // 構成:
-        //   dir/folder_in/sub_x/z.zip  (walk 順: 先に列挙)
-        //   dir/folder_in/sub_y/a.zip  (walk 順: 後に列挙)
-        //   dir/zz_toplevel.zip        (トップレベル直接指定、自然順ソート対象)
-        // 期待: toplevel_containers = [zz_toplevel.zip]
-        //       folder_containers   = [z.zip, a.zip]  ← walk 順を保持 (自然順 [a, z] とは異なる)
-        //       結合後の containers = [zz_toplevel.zip, z.zip, a.zip]
-        //       FileList の先頭は即時展開された zz_toplevel.zip 由来。
+        //   dir/folder_in/sub_x/z.zip  (フォルダ再帰由来)
+        //   dir/folder_in/sub_y/a.zip  (フォルダ再帰由来)
+        //   dir/zz_toplevel.zip        (トップレベル入力由来)
+        //
+        // 論理パス比較:
+        //   dir/folder_in/sub_x/z.zip < dir/folder_in/sub_y/a.zip < dir/zz_toplevel.zip
         let dir = setup_test_dir("toplevel_vs_folder_order", 0);
         let folder_in = dir.join("folder_in");
         let sub_x = folder_in.join("sub_x");
@@ -2242,7 +2240,7 @@ mod tests {
         let files = doc.file_list().files();
         assert_eq!(files.len(), 3, "3つの ZIP から各1エントリずつ");
 
-        // 並びは [zz_toplevel.zip, z.zip, a.zip] の順
+        // アーカイブパス順: [folder_in/sub_x/z.zip, folder_in/sub_y/a.zip, zz_toplevel.zip]
         let names: Vec<&std::ffi::OsStr> = files
             .iter()
             .map(|f| match &f.source {
@@ -2255,11 +2253,11 @@ mod tests {
         assert_eq!(
             names,
             vec![
-                std::ffi::OsStr::new("zz_toplevel.zip"),
                 std::ffi::OsStr::new("z.zip"),
                 std::ffi::OsStr::new("a.zip"),
+                std::ffi::OsStr::new("zz_toplevel.zip"),
             ],
-            "トップレベルは自然順、フォルダ再帰由来は走査順を維持すべき"
+            "アーカイブパス順 (論理パス順) で並ぶべき"
         );
 
         cleanup_test_dir(&dir);
