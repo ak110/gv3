@@ -37,17 +37,9 @@ jobs:
         if: failure() && steps.ci.outcome == 'failure'
         shell: bash
         run: |
-          python .github/scripts/pyfltr-annotate.py pyfltr-output.jsonl || true
-          uvx pyfltr show-run latest || true
-          # 失敗ツールの生出力 (output.log) も末尾を ::error:: アノテーションに残す。
-          # message フィールドは既定 2000 文字で中略されており、clippy のように
-          # 先頭にコンパイルログが大量に詰まると本体エラーが落ちる。
-          # show-run --output で全文を取って末尾側 6KB だけ別アノテーションに出す。
-          for cmd in cargo-clippy cargo-check cargo-test cargo-deny cargo-fmt typos prettier markdownlint textlint actionlint pre-commit; do
-            uvx pyfltr show-run latest --commands="$cmd" --output > "/tmp/pyfltr-${cmd}.log" 2>/dev/null || true
-            if [ -s "/tmp/pyfltr-${cmd}.log" ]; then
-              PYFLTR_CMD="$cmd" PYFLTR_LOG="/tmp/pyfltr-${cmd}.log" \
-                python .github/scripts/pyfltr-output-tail.py
-            fi
-          done
+          # 失敗時のみ動かすため `set +e` で個々の補助コマンドが落ちても全体を継続させる。
+          set +e
+          python .github/scripts/pyfltr-annotate.py pyfltr-output.jsonl
+          uvx pyfltr show-run latest
+          exit 0
       - run: pinact run --check
