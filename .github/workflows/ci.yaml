@@ -39,7 +39,11 @@ jobs:
         run: |
           # 失敗時のみ動かすため `set +e` で個々の補助コマンドが落ちても全体を継続させる。
           set +e
+          # 必ず1件はアノテーションを残し、診断ステップ自体が動いたことを Annotations パネルで分かるようにする。
+          echo "::error file=.github/workflows/ci.yaml,line=1,title=pyfltr diagnostic::diagnostic step started; output below"
           python .github/scripts/pyfltr-annotate.py pyfltr-output.jsonl
+          py_rc=$?
+          echo "::warning file=.github/workflows/ci.yaml,line=1,title=pyfltr diagnostic::python exit=$py_rc"
           uvx pyfltr show-run latest
           exit 0
       - name: 失敗時のpyfltr出力をアーティファクトに保存
