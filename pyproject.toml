@@ -11,6 +11,10 @@ prettier = true
 # 中略マーカーの内側に消えてしまうため、頭/尾の両側にエラー詳細が残るよう拡張する。
 jsonl-message-max-chars = 12000
 jsonl-message-max-lines = 200
+# cargo-deny は mise registry に存在しないため `mise exec cargo-deny@latest` だと
+# 解決に失敗する。CI では taiki-e/install-action が PATH に置くので runner=direct で
+# 直接呼び出させる。
+cargo-deny-runner = "direct"
 
 extend-exclude = [
     "target",
