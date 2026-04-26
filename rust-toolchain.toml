@@ -1,0 +1,7 @@
+[toolchain]
+# Rust 1.95 で clippy::collapsible_match などが if-else 以外の単純な if にも誤検知する
+# 不具合 (rust-clippy#16560 follow-up) を回避し、CI の挙動をローカルと揃えるため、
+# プロジェクト全体で 1.94 系列を固定する。MSRV (Cargo.toml `rust-version`) と一致。
+channel = "1.94"
+profile = "minimal"
+components = ["rustfmt", "clippy"]
