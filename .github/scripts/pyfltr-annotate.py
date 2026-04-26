@@ -40,7 +40,11 @@ def main() -> int:
         # tail 側に残るため、ここでは末尾側を残す方針にする。
         if len(msg) > 4000:
             msg = "…" + msg[-4000:]
-        print(f"::error title=pyfltr {cmd} ({status})::{msg}")
+        # GitHub Actions の Annotations パネルに表示させるには file= が必要なため、
+        # 仮パスとして workflow 自身を指す (パネルから該当ステップに飛べる)。
+        print(
+            f"::error file=.github/workflows/ci.yaml,line=1,title=pyfltr {cmd} ({status})::{msg}"
+        )
     return 0
 
 

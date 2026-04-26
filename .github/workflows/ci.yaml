@@ -39,18 +39,15 @@ jobs:
         run: |
           # 失敗時のみ動かすため `set +e` で個々の補助コマンドが落ちても全体を継続させる。
           set +e
-          echo "::group::diagnostic step start"
-          echo "pwd: $(pwd)"
-          echo "ls pyfltr-output.jsonl:"
-          ls -la pyfltr-output.jsonl || echo "  (not found)"
-          echo "::endgroup::"
-          echo "::group::pyfltr-annotate.py output"
           python .github/scripts/pyfltr-annotate.py pyfltr-output.jsonl
-          rc=$?
-          echo "  python exit: $rc"
-          echo "::endgroup::"
-          echo "::group::pyfltr show-run latest"
           uvx pyfltr show-run latest
-          echo "::endgroup::"
           exit 0
+      - name: 失敗時のpyfltr出力をアーティファクトに保存
+        if: failure() && steps.ci.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pyfltr-output
+          path: pyfltr-output.jsonl
+          if-no-files-found: warn
+          retention-days: 7
       - run: pinact run --check
