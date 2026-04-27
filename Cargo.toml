@@ -2,7 +2,7 @@
 name = "gv"
 version = "1.5.8"
 edition = "2024"
-rust-version = "1.94"
+rust-version = "1.95"
 description = "Windows用の軽量画像ビューアー"
 license = "MIT"
 repository = "https://github.com/ak110/gv"
@@ -74,15 +74,16 @@ opt-level = 1
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }
-# clippy 1.95 で `collapsible_match` が if-else 以外の単純な if にも誤検知する不具合あり。
+# Rust 1.95 系の clippy で `collapsible_match` が if-else 以外の単純な if にも誤検知する。
 # (例: `WM_SETCURSOR => { if app.on_set_cursor() { ... } }` を guard に潰す提案)
 # 対象はガード化で意味が変わらないものも多いが、上流の false-positive 修正を待つため
-# 一旦この lint は許可する。
+# この lint は許可する。Rust 1.95 系を採用している間は外せない。
 collapsible_match = "allow"
-# `loop { let Some(x) = expr else break; ... }` を `while let Some(x) = expr` に
-# 提案する lint だが、ループ本体で expr 由来のフィールドを &mut self で書き換える
-# パターンでは while-let の借用が長く生き残ってしまい単純な書き換えができない。
-# document.rs `process_expand_results` がまさに該当するため、この lint は許可する。
+# Rust 1.95 系の clippy が `loop { let Some(x) = expr else break; ... }` を
+# `while let Some(x) = expr` に書き換えるよう提案するが、ループ本体で expr 由来の
+# フィールドを &mut self で書き換えるパターンでは while-let の借用が長く生き残り
+# 単純な書き換えができない。document.rs `process_expand_results` がまさに該当する
+# ため、この lint は許可する。Rust 1.95 系を採用している間は外せない。
 while_let_loop = "allow"
 cast_possible_truncation = "allow"
 cast_possible_wrap = "allow"

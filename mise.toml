@@ -3,11 +3,12 @@ uv = "latest"
 # Windows CI で `rustup component add` が異なるツールチェーンに当たり cargo-clippy が
 # 見つからない事象が出ていたため、mise の rust プラグイン経由で components を一緒に
 # インストールする (mise が解決した実体ツールチェーン上に確実に component を入れる)。
-# 部分指定 "1.94" だと mise の rust プラグインが 1.95.0 を引き当ててしまい、
-# clippy 1.95 の新しい lint で CI が落ちる事象があったため、具体的なパッチ
-# バージョンを明示する。MSRV (Cargo.toml `rust-version`) と整合し、rust-toolchain.toml
-# も同じ系列を指定する。
-rust = { version = "1.94.1", components = "rustfmt,clippy" }
+# パッチバージョンまで明示するのは mise の partial version 解決ミスでローカルと CI の
+# Rust が食い違うのを防ぐため。MSRV (Cargo.toml `rust-version`) と整合し、
+# rust-toolchain.toml も同じ系列を指定する。
+# 1.95 系で `collapsible_match` / `while_let_loop` の clippy 動作変更が入ったが、
+# Cargo.toml の `[lints.clippy]` で対象 lint を allow 指定して許容している。
+rust = { version = "1.95.0", components = "rustfmt,clippy" }
 node = "lts"
 pnpm = "latest"
 pinact = "latest"
