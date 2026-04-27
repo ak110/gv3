@@ -6,6 +6,8 @@ default_language_version:
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
+    # v6.0.0 (2025-08-09) は 2026-04-27 時点で公式リポジトリの最新タグ。
+    # 新タグが出たら追従する。
     rev: v6.0.0
     hooks:
       - id: check-added-large-files
