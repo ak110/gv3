@@ -50,7 +50,7 @@ crossbeam-channel = "0.5"
 natord = "1.0"
 zip = { version = "8", default-features = false, features = ["deflate"] }
 unrar = "0.5"
-sevenz-rust2 = { version = "0.20", features = ["bzip2", "zstd", "aes256"] }
+sevenz-rust2 = { version = "0.21", features = ["bzip2", "zstd", "aes256"] }
 libloading = "0.9"
 ureq = "3"
 serde_json = "1"
