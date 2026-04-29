@@ -48,8 +48,13 @@ run_windows = [
 
 [tasks.setup-ci]
 description = "CI環境のセットアップ (cargo install をスキップ)"
-# rustfmt / clippy の component インストールは mise の `[tools].rust` 側に寄せている。
+# `[tools].rust` 側で components を指定しているが、Windows CI で mise の rust
+# プラグインが components を解決しないことがある (2026-04-29 時点で mise 2026.4.25
+# にて再現: ログには "info: downloading 5 components" が出るが、後段で
+# `'cargo-clippy.exe' is not installed for the toolchain` エラーになる)。
+# mise が設定する RUSTUP_TOOLCHAIN を使い rustup から明示的に冪等補強する。
 run = [
+  "rustup component add rustfmt clippy",
   "pnpm install",
 ]
 
@@ -81,10 +86,14 @@ run = [
 
 [tasks.update]
 description = "依存パッケージの更新"
+# `corepack use pnpm@latest` は package.json の `packageManager` フィールドを
+# 最新 pnpm のバージョン+ハッシュに書き換える。`pnpm update --latest` は依存のみで
+# pnpm 本体のバージョンは更新しないため、両者を組にして依存とランナーを揃える。
 run = [
   "cargo upgrade --incompatible",
   "cargo update",
   "pnpm update --latest",
+  "corepack use pnpm@latest",
   "bash -c 'GITHUB_TOKEN=$(gh auth token) pinact run --update --min-age 1'",
 ]
 
