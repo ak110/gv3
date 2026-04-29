@@ -51,13 +51,16 @@ impl SusiePlugin {
             Library::new(path).with_context(|| format!("DLLロード失敗: {}", path.display()))?
         };
 
-        // SAFETY: 取得するシンボル名と GetPluginInfoFn / IsSupportedFn のシグネチャは
-        // Susie プラグイン仕様 (32bit/64bit ABI) に準拠している。シグネチャ不一致の DLL を
-        // 読み込んだ場合は呼び出し時に未定義動作になりうるが、これは Susie 規格自体の仮定。
+        // SAFETY (以下の `lib.get::<Fn>` 系すべてに共通):
+        // 取得するシンボル名と関数型 (GetPluginInfoFn / IsSupportedFn / GetPictureFn /
+        // GetArchiveInfoFn / GetFileFn) のシグネチャは Susie プラグイン仕様
+        // (32bit/64bit ABI) に準拠している。シグネチャ不一致の DLL を読み込んだ場合は
+        // 呼び出し時に未定義動作になりうるが、これは Susie 規格自体の仮定。
         let get_plugin_info: GetPluginInfoFn = unsafe {
             *lib.get::<GetPluginInfoFn>(b"GetPluginInfo\0")
                 .with_context(|| "GetPluginInfoが見つからない")?
         };
+        // SAFETY: 上記 GetPluginInfo 取得と同じ前提 (Susie 仕様準拠のシグネチャ)。
         let is_supported: IsSupportedFn = unsafe {
             *lib.get::<IsSupportedFn>(b"IsSupported\0")
                 .with_context(|| "IsSupportedが見つからない")?
@@ -75,6 +78,7 @@ impl SusiePlugin {
 
         // オプションシンボルの解決
         let get_picture: Option<GetPictureFn> = if plugin_type == SusiePluginType::Image {
+            // SAFETY: 上記と同じ前提 (Susie 仕様準拠のシグネチャ)。
             Some(unsafe {
                 *lib.get::<GetPictureFn>(b"GetPicture\0")
                     .with_context(|| "画像プラグインにGetPictureが存在しない")?
@@ -85,6 +89,7 @@ impl SusiePlugin {
 
         let get_archive_info: Option<GetArchiveInfoFn> = if plugin_type == SusiePluginType::Archive
         {
+            // SAFETY: 上記と同じ前提 (Susie 仕様準拠のシグネチャ)。
             Some(unsafe {
                 *lib.get::<GetArchiveInfoFn>(b"GetArchiveInfo\0")
                     .with_context(|| "アーカイブプラグインにGetArchiveInfoが存在しない")?
@@ -94,6 +99,7 @@ impl SusiePlugin {
         };
 
         let get_file: Option<GetFileFn> = if plugin_type == SusiePluginType::Archive {
+            // SAFETY: 上記と同じ前提 (Susie 仕様準拠のシグネチャ)。
             Some(unsafe {
                 *lib.get::<GetFileFn>(b"GetFile\0")
                     .with_context(|| "アーカイブプラグインにGetFileが存在しない")?
@@ -242,6 +248,9 @@ impl SusiePlugin {
             let mut entries = Vec::new();
             let mut offset = 0usize;
             loop {
+                // SAFETY: ptr は `LocalLock` で取得した有効なメモリ領域を指す。offset はアライン境界内で
+                // entry_size ずつ進むため、キャスト後の ArchiveFileInfo への参照は妥当である。
+                // ループ内で offset の上限チェック（10000エントリ）により暴走を防止する。
                 let entry_ptr = unsafe { ptr.cast::<u8>().add(offset) };
                 let entry = unsafe { &*entry_ptr.cast::<ArchiveFileInfo>() };
                 if entry.is_terminator() {
@@ -300,6 +309,9 @@ impl SusiePlugin {
             if ptr.is_null() || size == 0 {
                 Vec::new()
             } else {
+                // SAFETY: ptr は `LocalLock` で取得した有効なメモリ領域を指し、size は `LocalSize` で確認した
+                // 正確なバイト数である。スライス変換後の参照は with_local_lock のクロージャ内に留まり、
+                // LocalUnlock 後に参照が逃げないことが保証される（to_vec で所有権化）。
                 unsafe { std::slice::from_raw_parts(ptr as *const u8, size) }.to_vec()
             }
         });

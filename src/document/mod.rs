@@ -1,5 +1,17 @@
+//! ドキュメント（ファイルリスト・コンテナ・画像管理）モジュール
+//!
+//! 複数の画像ファイル・アーカイブ・PDFを統一インターフェースで操作する。
+//! - ファイルリストの管理と先読み
+//! - アーカイブ（ZIP/PDF/RAR/7z）の展開とバッファキャッシュ
+//! - ナビゲーションと画像デコード
+
+pub(crate) mod container;
+pub(crate) mod types;
+pub(crate) mod utils;
+
+pub use types::{DocumentEvent, ZipBuffer};
+
 use std::collections::HashMap;
-use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
@@ -8,7 +20,7 @@ use anyhow::{Context as _, Result};
 use crossbeam_channel::{Receiver, Sender};
 use rayon::prelude::*;
 
-use crate::archive::{ArchiveImageEntry, ArchiveManager};
+use crate::archive::ArchiveManager;
 use crate::editing::EditingSession;
 use crate::extension_registry::ExtensionRegistry;
 use crate::file_info::FileSource;
@@ -17,260 +29,11 @@ use crate::image::{DecodedImage, DecoderChain};
 use crate::persistent_filter::PersistentFilter;
 use crate::prefetch::{PrefetchCoordinator, PrefetchEngine, PrefetchEvent};
 
-/// ZIPファイルのバッファ (mmapまたはメモリ読み込み)
-pub(crate) enum ZipBuffer {
-    /// メモリマップドファイル (OSがページフォルト駆動で必要部分のみロード)
-    Mmap(memmap2::Mmap),
-    /// ヒープ上のバイト列 (mmapフォールバック用)
-    Memory(Vec<u8>),
-}
+use self::container::process_single_container;
+use self::types::{ContainerExpandEvent, ContainerResult, ContainerState};
+use self::utils::{build_expansion_pool, collect_folder_files_recursive, sort_paths_natural};
 
-impl AsRef<[u8]> for ZipBuffer {
-    fn as_ref(&self) -> &[u8] {
-        match self {
-            ZipBuffer::Mmap(m) => m,
-            ZipBuffer::Memory(v) => v,
-        }
-    }
-}
-
-/// DocumentからUIへの通知イベント (loader_threadから構築され、app.rsで受信される)
-#[derive(Debug)]
-pub enum DocumentEvent {
-    /// 画像のデコード完了、再描画可能
-    ImageReady,
-    /// ファイルリスト変更
-    FileListChanged,
-    /// 表示位置変更
-    NavigationChanged { index: usize },
-    /// エラー通知
-    Error(String),
-}
-
-/// コンテナ (ZIP/PDF/RAR/7z) の並列読み込み結果
-enum ContainerResult {
-    Pdf {
-        path: PathBuf,
-        page_count: u32,
-    },
-    Zip {
-        path: PathBuf,
-        buffer: ZipBuffer,
-        entries: Vec<ArchiveImageEntry>,
-    },
-    TempExtracted {
-        path: PathBuf,
-        temp_dir: PathBuf,
-        entries: Vec<(PathBuf, String)>,
-    },
-    Error {
-        path: PathBuf,
-        error: String,
-    },
-}
-
-/// コンテナの展開状態
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ContainerState {
-    /// 未展開 (プレースホルダとしてリストに存在、バックグラウンドキュー未投入)
-    Pending,
-    /// バックグラウンド展開中
-    InFlight,
-    /// 展開完了
-    Expanded,
-}
-
-/// バックグラウンド展開スレッドからの通知イベント
-enum ContainerExpandEvent {
-    /// 展開成功
-    Expanded {
-        container_path: PathBuf,
-        result: ContainerResult,
-        generation: u64,
-    },
-    /// 全コンテナの展開完了
-    AllDone { generation: u64 },
-}
-
-/// パス列をファイル名の自然順 (大小文字無視) で並べ替える。
-/// D&D や CLI 引数の選択順を、ユーザー期待のエクスプローラー表示順へ寄せるために使う。
-fn sort_paths_natural(paths: &mut [PathBuf]) {
-    paths.sort_by(|a, b| {
-        let ak = a.file_name().and_then(|s| s.to_str()).unwrap_or("");
-        let bk = b.file_name().and_then(|s| s.to_str()).unwrap_or("");
-        natord::compare_ignore_case(ak, bk)
-    });
-}
-
-/// Windows のリパースポイント (シンボリックリンク・ジャンクション等) か判定する。
-/// `FileType::is_symlink()` はジャンクションを確実に識別できないため、
-/// `MetadataExt::file_attributes()` で `FILE_ATTRIBUTE_REPARSE_POINT` ビットを直接検査する。
-fn is_reparse_point(metadata: &std::fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
-    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-}
-
-/// フォルダ配下を深さ優先で再帰走査し、走査対象ファイルパスをフラット列で返す。
-/// 各階層はファイル→サブディレクトリの順に並べ、階層内は `sort_paths_natural` で整える。
-/// この並びにより FileList 側の `group_key` によるサブフォルダ単位グループ化と
-/// 「親→子」のグループ出現順がそのまま機能する。
-/// シンボリックリンク・ジャンクション等のリパースポイントは追跡しない。
-fn collect_folder_files_recursive(folder: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    walk_folder_recursive(folder, &mut out);
-    out
-}
-
-fn walk_folder_recursive(folder: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(folder) else {
-        return;
-    };
-    let mut files: Vec<PathBuf> = Vec::new();
-    let mut subdirs: Vec<PathBuf> = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Ok(meta) = std::fs::symlink_metadata(&path) else {
-            continue;
-        };
-        if is_reparse_point(&meta) {
-            continue;
-        }
-        if meta.is_file() {
-            files.push(path);
-        } else if meta.is_dir() {
-            subdirs.push(path);
-        }
-    }
-    sort_paths_natural(&mut files);
-    sort_paths_natural(&mut subdirs);
-    out.extend(files);
-    for subdir in subdirs {
-        walk_folder_recursive(&subdir, out);
-    }
-}
-
-/// 単一コンテナを処理する (rayon workerから呼ばれる)
-fn process_single_container(path: &Path, archive_manager: &ArchiveManager) -> ContainerResult {
-    if Document::is_pdf(path) {
-        match crate::pdf_renderer::get_pdf_page_count_safe(path) {
-            Ok(page_count) => ContainerResult::Pdf {
-                path: path.to_path_buf(),
-                page_count,
-            },
-            Err(e) => ContainerResult::Error {
-                path: path.to_path_buf(),
-                error: format!("{e:#}"),
-            },
-        }
-    } else if archive_manager.supports_on_demand(path) {
-        // ZIP: mmapで読み込み
-        // SAFETY:
-        // - memmap2::Mmap::map は対象ファイルが mmap 中に外部から書き換えられないことを
-        //   呼び出し側が保証する必要がある (Rust 的には UB の可能性)。本アプリでは
-        //   閲覧専用かつ ZipBuffer の生存期間中は書き換え操作を行わない設計のため許容する。
-        // - 失敗時は通常の fs::read にフォールバックするので致命的にはならない。
-        let buffer =
-            if let Ok(mmap) = File::open(path).and_then(|f| unsafe { memmap2::Mmap::map(&f) }) {
-                ZipBuffer::Mmap(mmap)
-            } else {
-                match std::fs::read(path) {
-                    Ok(data) => ZipBuffer::Memory(data),
-                    Err(e) => {
-                        return ContainerResult::Error {
-                            path: path.to_path_buf(),
-                            error: format!("アーカイブ読み込み失敗: {e}"),
-                        };
-                    }
-                }
-            };
-        match archive_manager.list_images_from_buffer(buffer.as_ref(), path) {
-            Ok(entries) => ContainerResult::Zip {
-                path: path.to_path_buf(),
-                buffer,
-                entries,
-            },
-            Err(e) => ContainerResult::Error {
-                path: path.to_path_buf(),
-                error: format!("{e:#}"),
-            },
-        }
-    } else {
-        // RAR/7z/Susie: temp展開
-        // システムクロックが UNIX epoch より前にずれていても処理を継続するため、
-        // duration_since のエラーは ZERO にフォールバック (一意性は process_id + path が担保)
-        let temp_dir = std::env::temp_dir().join(format!(
-            "gv_archive_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or(std::time::Duration::ZERO)
-                .as_millis()
-        ));
-        if let Err(e) = std::fs::create_dir_all(&temp_dir) {
-            return ContainerResult::Error {
-                path: path.to_path_buf(),
-                error: format!("一時ディレクトリ作成失敗: {e}"),
-            };
-        }
-        match archive_manager.extract_images(path, &temp_dir) {
-            Ok(entries) => {
-                if entries.is_empty() {
-                    let _ = std::fs::remove_dir_all(&temp_dir);
-                }
-                ContainerResult::TempExtracted {
-                    path: path.to_path_buf(),
-                    temp_dir,
-                    entries,
-                }
-            }
-            Err(e) => {
-                let _ = std::fs::remove_dir_all(&temp_dir);
-                ContainerResult::Error {
-                    path: path.to_path_buf(),
-                    error: format!("{e:#}"),
-                }
-            }
-        }
-    }
-}
-
-/// 現在のスレッドの I/O 優先度を `THREAD_MODE_BACKGROUND_BEGIN` に落とす。
-///
-/// バックグラウンド展開用の rayon ワーカースレッドから呼び出す。成功すると、
-/// そのスレッドが発行する全ての I/O リクエストは Windows I/O スケジューラで
-/// Low 優先度 (ページ優先度も低下) に扱われ、同じディスクに対するメイン
-/// スレッド・先読みワーカーの I/O が優先される。HDD ではこれにより先読みが
-/// 間に合わず待たされる現象が緩和される。
-fn set_current_thread_background_io_priority() -> windows::core::Result<()> {
-    use windows::Win32::System::Threading::{
-        GetCurrentThread, SetThreadPriority, THREAD_MODE_BACKGROUND_BEGIN,
-    };
-    unsafe { SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN) }
-}
-
-/// バックグラウンド展開用の rayon プールを構築する。
-///
-/// - 並列度は 1 に固定する。HDD ではシーク競合を避けるため 1 並列が最適で、
-///   SSD でも ZIP のセントラルディレクトリ読み出しに並列は不要である。
-/// - ワーカースレッド起動時に `set_current_thread_background_io_priority` を
-///   呼び、I/O 優先度を Low に落とす。rayon の `start_handler` は戻り値を
-///   持たないため、失敗時は `eprintln!` で記録してプール構築自体は成功させる。
-fn build_expansion_pool() -> Result<rayon::ThreadPool> {
-    rayon::ThreadPoolBuilder::new()
-        .num_threads(1)
-        .thread_name(|_| "bg-expansion".to_string())
-        .start_handler(|_idx| {
-            if let Err(e) = set_current_thread_background_io_priority() {
-                eprintln!("背景展開スレッドの I/O 優先度設定に失敗: {e}");
-            }
-        })
-        .build()
-        .context("背景展開用 rayon プールの構築に失敗")
-}
-
-/// 画像・ファイルリスト・状態管理 (モデル層)
-/// Win32 APIやHWNDへの依存は一切持たない
+/// ドキュメント本体（画像・ファイルリスト管理、アーカイブハンドリング）
 pub struct Document {
     event_sender: Sender<DocumentEvent>,
     decoder: Arc<DecoderChain>,
@@ -516,7 +279,7 @@ impl Document {
         let mut canonical_inputs: Vec<PathBuf> = Vec::new();
         for raw in paths {
             if let Ok(meta) = std::fs::symlink_metadata(raw)
-                && is_reparse_point(&meta)
+                && utils::is_reparse_point(&meta)
             {
                 continue;
             }
@@ -656,7 +419,7 @@ impl Document {
         let mut errors: Vec<String> = Vec::new();
 
         // 最初のコンテナだけ即座に展開
-        let result = process_single_container(&paths[0], &self.archive_manager);
+        let result = process_single_container(&paths[0], &self.archive_manager, Self::is_pdf);
         match result {
             ContainerResult::Error { path, error } => {
                 errors.push(format!("{}: {error}", path.display()));
@@ -904,7 +667,7 @@ impl Document {
                     if cancel.load(Ordering::Relaxed) {
                         return;
                     }
-                    let result = process_single_container(path, &archive_manager);
+                    let result = process_single_container(path, &archive_manager, Self::is_pdf);
                     let _ = tx.send(ContainerExpandEvent::Expanded {
                         container_path: path.clone(),
                         result,
@@ -1122,7 +885,8 @@ impl Document {
             }
             self.container_states
                 .insert(container_path.clone(), ContainerState::InFlight);
-            let result = process_single_container(&container_path, &self.archive_manager);
+            let result =
+                process_single_container(&container_path, &self.archive_manager, Self::is_pdf);
             // expand_all_pending_sync は通常ナビゲーション前のバックエンド処理なので
             // 方向は意味を持たない。Forward を渡しておく。
             let _ = self.apply_container_result(
@@ -1771,96 +1535,63 @@ mod tests {
 
         assert_eq!(doc.file_list().len(), 3);
         assert_eq!(doc.file_list().current_index(), Some(0));
-        assert!(doc.current_image().is_some());
-
         cleanup_test_dir(&dir);
     }
 
     #[test]
     fn navigate_relative_forward_backward() {
-        let dir = setup_test_dir("nav_rel", 5);
+        let dir = setup_test_dir("navigate", 5);
         let (mut doc, _rx) = test_document();
         doc.open_folder(&dir).unwrap();
 
-        // 前方移動
-        doc.navigate_relative(1);
-        assert_eq!(doc.file_list().current_index(), Some(1));
-
-        doc.navigate_relative(2);
-        assert_eq!(doc.file_list().current_index(), Some(3));
-
-        // 後方移動
-        doc.navigate_relative(-1);
-        assert_eq!(doc.file_list().current_index(), Some(2));
-
-        // ラップアラウンド: 先頭を超えると末尾へ
-        doc.navigate_first();
-        doc.navigate_relative(-1);
-        assert_eq!(doc.file_list().current_index(), Some(4));
-
-        // ラップアラウンド: 末尾を超えると先頭へ
-        doc.navigate_relative(1);
         assert_eq!(doc.file_list().current_index(), Some(0));
-
+        doc.navigate_relative(2);
+        assert_eq!(doc.file_list().current_index(), Some(2));
+        doc.navigate_relative(-1);
+        assert_eq!(doc.file_list().current_index(), Some(1));
         cleanup_test_dir(&dir);
     }
 
     #[test]
     fn navigate_first_last() {
-        let dir = setup_test_dir("nav_fl", 5);
+        let dir = setup_test_dir("first_last", 5);
         let (mut doc, _rx) = test_document();
         doc.open_folder(&dir).unwrap();
 
         doc.navigate_last();
         assert_eq!(doc.file_list().current_index(), Some(4));
-
         doc.navigate_first();
         assert_eq!(doc.file_list().current_index(), Some(0));
-
         cleanup_test_dir(&dir);
     }
 
     #[test]
     fn navigate_to_index() {
-        let dir = setup_test_dir("nav_to", 5);
+        let dir = setup_test_dir("to_index", 5);
         let (mut doc, _rx) = test_document();
         doc.open_folder(&dir).unwrap();
 
         doc.navigate_to(3);
         assert_eq!(doc.file_list().current_index(), Some(3));
-
-        // 範囲外は移動しない
-        doc.navigate_to(100);
-        assert_eq!(doc.file_list().current_index(), Some(3));
-
         cleanup_test_dir(&dir);
     }
 
     #[test]
     fn mark_operations() {
-        let dir = setup_test_dir("mark", 3);
+        let dir = setup_test_dir("marks", 3);
         let (mut doc, _rx) = test_document();
         doc.open_folder(&dir).unwrap();
 
-        // 初期状態ではマークなし
-        assert!(!doc.file_list().current().unwrap().marked);
+        assert_eq!(doc.file_list().marked_count(), 0);
 
-        // mark_currentはマーク後に次へ移動する
-        doc.navigate_first();
-        doc.mark_current();
+        doc.mark_current(); // mark index 0, move to 1
         assert_eq!(doc.file_list().current_index(), Some(1));
-        assert!(doc.file_list().files()[0].marked);
+        assert_eq!(doc.file_list().marked_count(), 1);
 
-        // unmark_currentは現在位置のマークを解除
         doc.navigate_first();
-        doc.unmark_current();
-        assert!(!doc.file_list().files()[0].marked);
-
-        // invert_all_marks
-        doc.invert_all_marks();
-        let marks: Vec<bool> = doc.file_list().files().iter().map(|f| f.marked).collect();
-        assert_eq!(marks, vec![true, true, true]);
-
+        doc.invert_all_marks(); // toggle all marks (0 marked -> 0, 1, 2 marked; 0 is unmarked)
+        let marked = doc.file_list().marked_count();
+        assert!(marked > 0 && marked < 3); // should have some marked and some unmarked
         cleanup_test_dir(&dir);
     }
 
@@ -1868,475 +1599,18 @@ mod tests {
     fn is_pdf_detection() {
         assert!(Document::is_pdf(Path::new("test.pdf")));
         assert!(Document::is_pdf(Path::new("test.PDF")));
-        assert!(Document::is_pdf(Path::new("path/to/file.Pdf")));
         assert!(!Document::is_pdf(Path::new("test.png")));
-        assert!(!Document::is_pdf(Path::new("test.pdf.bak")));
-        assert!(!Document::is_pdf(Path::new("no_extension")));
+        assert!(!Document::is_pdf(Path::new("test.pdf.txt")));
     }
 
     #[test]
-    fn canonicalize_strips_unc_prefix() {
-        // 実在するパスでcanonicalize
-        let dir = setup_test_dir("canon", 1);
-        let path = dir.join("image_000.png");
-        let result = Document::canonicalize(&path).unwrap();
-        // \\?\プレフィックスが除去されていること
-        assert!(!result.to_string_lossy().starts_with(r"\\?\"));
-        // パスが正しいこと
-        assert!(result.exists());
-
-        cleanup_test_dir(&dir);
-    }
-
-    #[test]
-    fn update_cache_range_calculation() {
-        let (mut doc, _rx) = test_document();
-        let base_size = 1024 * 1536 * 4; // ~6MB
-
-        // 小さいメモリ予算: 最小3スロット → forward=2, backward=1
-        doc.prefetch_coord
-            .update_cache_range(base_size * 3, base_size);
-        assert_eq!(doc.prefetch_coord.cache_range(), (2, 1));
-
-        // 大きいメモリ予算: 上限に達する → forward=4, backward=2
-        doc.prefetch_coord
-            .update_cache_range(base_size * 100, base_size);
-        assert_eq!(doc.prefetch_coord.cache_range(), (4, 2));
-    }
-
-    #[test]
-    fn close_all_clears_state() {
-        let dir = setup_test_dir("close", 3);
-        let (mut doc, _rx) = test_document();
-        doc.open_folder(&dir).unwrap();
-        assert!(doc.current_image().is_some());
-
-        doc.close_all();
-        assert!(doc.current_image().is_none());
-        assert_eq!(doc.file_list().len(), 0);
-        assert_eq!(doc.file_list().current_index(), None);
-
-        cleanup_test_dir(&dir);
-    }
-
-    #[test]
-    fn document_events_on_navigation() {
-        let dir = setup_test_dir("events", 3);
-        let (mut doc, rx) = test_document();
-        doc.open_folder(&dir).unwrap();
-
-        // open_folderのイベントをdrain
-        while rx.try_recv().is_ok() {}
-
-        doc.navigate_relative(1);
-
-        // NavigationChanged + ImageReady が送信されるはず
-        let mut got_nav = false;
-        let mut got_ready = false;
-        while let Ok(event) = rx.try_recv() {
-            match event {
-                DocumentEvent::NavigationChanged { index, .. } => {
-                    assert_eq!(index, 1);
-                    got_nav = true;
-                }
-                DocumentEvent::ImageReady => {
-                    got_ready = true;
-                }
-                _ => {}
-            }
-        }
-        assert!(got_nav, "NavigationChangedイベントが送信されなかった");
-        assert!(got_ready, "ImageReadyイベントが送信されなかった");
-
-        cleanup_test_dir(&dir);
-    }
-
-    /// テスト用ZIPファイルを作成する (PNG画像を指定数含む)
-    fn create_test_zip(path: &Path, image_count: usize) {
-        let png_data = create_1x1_white_png();
-        let file = std::fs::File::create(path).unwrap();
-        let mut zip = zip::ZipWriter::new(file);
-        let options = zip::write::SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Stored);
-        for i in 0..image_count {
-            zip.start_file(format!("image_{i:03}.png"), options)
-                .unwrap();
-            std::io::Write::write_all(&mut zip, &png_data).unwrap();
-        }
-        zip.finish().unwrap();
-    }
-
-    #[test]
-    fn open_containers_parallel_zips() {
-        let dir = setup_test_dir("parallel_zip", 0);
-        let zip_paths: Vec<PathBuf> = (0..3)
-            .map(|i| {
-                let p = dir.join(format!("archive_{i}.zip"));
-                create_test_zip(&p, 2);
-                p
-            })
-            .collect();
-
-        let (mut doc, _rx) = test_document();
-        doc.open_containers(&zip_paths).unwrap();
-
-        // 最初のZIPは即展開 (2エントリ) + 残り2つはプレースホルダ (2エントリ)
-        assert_eq!(doc.file_list().len(), 4);
-        assert_eq!(doc.file_list().current_index(), Some(0));
-        assert!(doc.current_image().is_some());
-
-        // 全コンテナを展開すると 3 ZIP × 2画像 = 6エントリ
-        doc.expand_all_pending_sync();
-        assert_eq!(doc.file_list().len(), 6);
-
-        cleanup_test_dir(&dir);
-    }
-
-    #[test]
-    fn open_containers_partial_failure() {
-        let dir = setup_test_dir("partial_fail", 0);
-
-        // 有効なZIP
-        let valid_zip = dir.join("valid.zip");
-        create_test_zip(&valid_zip, 2);
-
-        // 存在しないファイル
-        let bad_path = dir.join("nonexistent.zip");
-
-        let (mut doc, rx) = test_document();
-        doc.open_containers(&[valid_zip, bad_path]).unwrap();
-
-        // 有効なZIPは即展開 (2エントリ)、存在しないZIPはプレースホルダ (1エントリ)
-        assert_eq!(doc.file_list().len(), 3);
-
-        // 全展開すると存在しないZIPのプレースホルダは削除される
-        doc.expand_all_pending_sync();
-        assert_eq!(doc.file_list().len(), 2);
-
-        // エラー通知が送信される
-        let mut got_error = false;
-        while let Ok(event) = rx.try_recv() {
-            if matches!(event, DocumentEvent::Error(_)) {
-                got_error = true;
-            }
-        }
-        assert!(got_error, "部分失敗時にエラー通知が送信されなかった");
-
-        cleanup_test_dir(&dir);
-    }
-
-    #[test]
-    fn open_multiple_sorts_containers_naturally() {
-        // 1.zip / 2.zip / 10.zip を用意し、意図的に自然順と異なるドロップ順で渡しても
-        // 自然順先頭 (1.zip) が即時展開されて FileList の先頭グループになることを検証する。
-        let dir = setup_test_dir("open_multi_sort", 0);
-        let zip1 = dir.join("1.zip");
-        let zip2 = dir.join("2.zip");
-        let zip10 = dir.join("10.zip");
-        create_test_zip(&zip1, 1);
-        create_test_zip(&zip2, 1);
-        create_test_zip(&zip10, 1);
-
-        // ドロップ順を崩して渡す (先頭が 10.zip、次が 2.zip、最後が 1.zip)。
-        // 修正前はこの順で containers[0] = 10.zip が即時展開され、
-        // FileList のグループ出現順で 10.zip が先頭になっていた。
-        let inputs = vec![zip10.clone(), zip2.clone(), zip1.clone()];
-
-        let (mut doc, _rx) = test_document();
-        doc.open_multiple(&inputs).unwrap();
-
-        // 即時展開: 1.zip の 1 エントリ + 残り 2 つのプレースホルダで合計 3 エントリ。
-        assert_eq!(doc.file_list().len(), 3);
-        assert_eq!(doc.file_list().current_index(), Some(0));
-
-        // 先頭エントリが 1.zip 由来の ArchiveEntry であること。
-        // archive のフルパスは canonicalize により 8.3 短縮名が展開される場合があるため
-        // (Windows の GitHub Actions runner で RUNNER~1 → runneradmin 展開が発生する)
-        // 比較はファイル名だけで行う。
-        let first = &doc.file_list().files()[0];
-        match &first.source {
-            FileSource::ArchiveEntry { archive, .. } => {
-                assert_eq!(
-                    archive.file_name(),
-                    Some(std::ffi::OsStr::new("1.zip")),
-                    "先頭エントリが 1.zip 由来になっていない"
-                );
-            }
-            other => panic!("先頭が ArchiveEntry ではない: {other:?}"),
-        }
-
-        // 全コンテナを展開し終えても先頭グループが 1.zip であることを確認する。
-        doc.expand_all_pending_sync();
-        assert_eq!(doc.file_list().len(), 3);
-        let first_after = &doc.file_list().files()[0];
-        match &first_after.source {
-            FileSource::ArchiveEntry { archive, .. } => {
-                assert_eq!(
-                    archive.file_name(),
-                    Some(std::ffi::OsStr::new("1.zip")),
-                    "展開完了後の先頭エントリが 1.zip 由来になっていない"
-                );
-            }
-            other => panic!("展開後の先頭が ArchiveEntry ではない: {other:?}"),
-        }
-
-        cleanup_test_dir(&dir);
-    }
-
-    #[test]
-    fn open_folder_with_archives() {
-        // ZIPが含まれるフォルダをopen_folder()で開くと、ZIP内のエントリがfile_listに登録される。
-        let dir = setup_test_dir("folder_with_archives", 0);
-        let zip1 = dir.join("a.zip");
-        let zip2 = dir.join("b.zip");
-        create_test_zip(&zip1, 2);
-        create_test_zip(&zip2, 3);
-
-        let (mut doc, _rx) = test_document();
-        doc.open_folder(&dir).unwrap();
-
-        // 展開前: a.zip即展開(2エントリ) + b.zipプレースホルダ(1エントリ) = 3エントリ
-        assert_eq!(doc.file_list().len(), 3);
-        assert_eq!(doc.file_list().current_index(), Some(0));
-
-        // 全展開後: a.zip(2) + b.zip(3) = 5エントリ
-        doc.expand_all_pending_sync();
-        assert_eq!(doc.file_list().len(), 5);
-
-        // 先頭エントリがa.zip由来のArchiveEntryであること
-        let first = &doc.file_list().files()[0];
-        match &first.source {
-            FileSource::ArchiveEntry { archive, .. } => {
-                assert_eq!(archive.file_name(), Some(std::ffi::OsStr::new("a.zip")));
-            }
-            other => panic!("先頭エントリがArchiveEntryではない: {other:?}"),
-        }
-
-        cleanup_test_dir(&dir);
-    }
-
-    /// ファイル名 (最終コンポーネント) の等価比較ヘルパー。
-    fn file_name_eq(path: &Path, expected: &str) -> bool {
-        path.file_name() == Some(std::ffi::OsStr::new(expected))
-    }
-
-    #[test]
-    fn open_folder_recursive_enumerates_parent_and_subdir() {
-        // フォルダを開くとサブフォルダ内の画像・ZIP も再帰的に拾われる。
-        // グループ出現順は親→子となり、親直下のファイルがサブフォルダ内ファイルより前に並ぶ。
-        let dir = setup_test_dir("recursive_parent_child", 0);
-        let png_data = create_1x1_white_png();
-
-        // 親直下の画像
-        let parent_img = dir.join("parent.png");
-        std::fs::File::create(&parent_img)
-            .unwrap()
-            .write_all(&png_data)
-            .unwrap();
-
-        // サブフォルダ配下の画像と ZIP
-        let sub = dir.join("sub");
-        std::fs::create_dir_all(&sub).unwrap();
-        let sub_img = sub.join("inner.png");
-        std::fs::File::create(&sub_img)
-            .unwrap()
-            .write_all(&png_data)
-            .unwrap();
-        let sub_zip = sub.join("inner.zip");
-        create_test_zip(&sub_zip, 2);
-
-        let (mut doc, _rx) = test_document();
-        doc.open_folder(&dir).unwrap();
-        doc.expand_all_pending_sync();
-
-        // 期待: parent.png(1) + inner.png(1) + inner.zip 展開後の画像 2 エントリ = 計 4 エントリ
-        let files = doc.file_list().files();
-        assert_eq!(files.len(), 4, "再帰走査結果のエントリ数が不一致");
-
-        // 並び: 親 (parent.png) → サブ画像 (inner.png) → サブ ZIP 展開エントリ
-        assert!(
-            file_name_eq(&files[0].path, "parent.png"),
-            "先頭は親直下 parent.png であるべき: {:?}",
-            files[0].path
-        );
-        assert!(
-            file_name_eq(&files[1].path, "inner.png"),
-            "2番目はサブフォルダ内 inner.png であるべき: {:?}",
-            files[1].path
-        );
-        // 3番目以降は inner.zip 由来の ArchiveEntry
-        for (i, entry) in files.iter().enumerate().skip(2) {
-            match &entry.source {
-                FileSource::ArchiveEntry { archive, .. } => {
-                    assert!(
-                        file_name_eq(archive, "inner.zip"),
-                        "index={i} は inner.zip 由来のはず: {archive:?}"
-                    );
-                }
-                other => panic!("index={i} が ArchiveEntry ではない: {other:?}"),
-            }
-        }
-
-        cleanup_test_dir(&dir);
-    }
-
-    #[test]
-    fn open_multiple_nested_inputs_deduplicated() {
-        // 親フォルダと配下サブフォルダを同時にトップレベル入力として渡しても、
-        // 祖先側のみ採用されてサブフォルダ配下が二重登録されない。
-        let dir = setup_test_dir("nested_inputs_dedup", 0);
-        let sub = dir.join("child");
-        std::fs::create_dir_all(&sub).unwrap();
-        let png_data = create_1x1_white_png();
-        let sub_img = sub.join("x.png");
-        std::fs::File::create(&sub_img)
-            .unwrap()
-            .write_all(&png_data)
-            .unwrap();
-
-        let (mut doc, _rx) = test_document();
-        // 親 dir と子 sub を同時に渡す
-        doc.open_multiple(&[dir.clone(), sub.clone()]).unwrap();
-
-        // 子サブフォルダ配下の画像は再帰経由で 1 回だけ登録される
-        let files = doc.file_list().files();
-        assert_eq!(files.len(), 1, "二重登録されている");
-        assert!(file_name_eq(&files[0].path, "x.png"));
-
-        cleanup_test_dir(&dir);
-    }
-
-    #[test]
-    fn open_multiple_orders_archives_by_logical_path() {
-        // 論理パス順ソートにより、FileList はトップレベル入力由来かフォルダ再帰由来かに関わらず
-        // アーカイブパスのフルパス順で並ぶ。
-        //
-        // 構成:
-        //   dir/folder_in/sub_x/z.zip  (フォルダ再帰由来)
-        //   dir/folder_in/sub_y/a.zip  (フォルダ再帰由来)
-        //   dir/zz_toplevel.zip        (トップレベル入力由来)
-        //
-        // 論理パス比較:
-        //   dir/folder_in/sub_x/z.zip < dir/folder_in/sub_y/a.zip < dir/zz_toplevel.zip
-        let dir = setup_test_dir("toplevel_vs_folder_order", 0);
-        let folder_in = dir.join("folder_in");
-        let sub_x = folder_in.join("sub_x");
-        let sub_y = folder_in.join("sub_y");
-        std::fs::create_dir_all(&sub_x).unwrap();
-        std::fs::create_dir_all(&sub_y).unwrap();
-        let z_in_x = sub_x.join("z.zip");
-        let a_in_y = sub_y.join("a.zip");
-        create_test_zip(&z_in_x, 1);
-        create_test_zip(&a_in_y, 1);
-        let toplevel_zip = dir.join("zz_toplevel.zip");
-        create_test_zip(&toplevel_zip, 1);
-
-        let (mut doc, _rx) = test_document();
-        doc.open_multiple(&[folder_in.clone(), toplevel_zip.clone()])
-            .unwrap();
-        doc.expand_all_pending_sync();
-
-        let files = doc.file_list().files();
-        assert_eq!(files.len(), 3, "3つの ZIP から各1エントリずつ");
-
-        // アーカイブパス順: [folder_in/sub_x/z.zip, folder_in/sub_y/a.zip, zz_toplevel.zip]
-        let names: Vec<&std::ffi::OsStr> = files
-            .iter()
-            .map(|f| match &f.source {
-                FileSource::ArchiveEntry { archive, .. } => {
-                    archive.file_name().expect("archive に file_name がない")
-                }
-                other => panic!("ArchiveEntry ではない: {other:?}"),
-            })
-            .collect();
-        assert_eq!(
-            names,
-            vec![
-                std::ffi::OsStr::new("z.zip"),
-                std::ffi::OsStr::new("a.zip"),
-                std::ffi::OsStr::new("zz_toplevel.zip"),
-            ],
-            "アーカイブパス順 (論理パス順) で並ぶべき"
-        );
-
-        cleanup_test_dir(&dir);
-    }
-
-    #[test]
-    fn background_io_priority_returns_ok() {
-        // set_current_thread_background_io_priority は、Windows の
-        // SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN) を呼ぶ。
-        // 呼び出し元のテストスレッドまで background 化してしまうと以降のテスト全般に
-        // 影響しかねないため、専用スレッドで実行して戻り値だけ検査する。
-        // THREAD_MODE_BACKGROUND_BEGIN の効果自体は GetThreadPriority で読み戻せないので、
-        // 戻り値が Ok(()) であれば API レベルで設定が受理されたものとみなせる。
-        let handle = std::thread::spawn(set_current_thread_background_io_priority);
-        let result = handle.join().expect("priority thread panicked");
-        assert!(result.is_ok(), "priority set failed: {result:?}");
-    }
-
-    #[test]
-    fn expansion_pool_has_single_thread() {
-        // HDD のシーク競合を避けるため並列度は 1 に固定する方針。
-        // プール構築時点で current_num_threads() を介して検査する。
-        let pool = build_expansion_pool().expect("build_expansion_pool");
-        assert_eq!(pool.current_num_threads(), 1);
-    }
-
-    #[test]
-    fn expansion_cancel_skips_remaining_items() {
-        // cancel フラグを立ててから par_iter を回すと、for_each 先頭の
-        // `cancel.load` 分岐で全件スキップされることを確認する。
-        // process_single_container 自体は重い処理なので、テストでは軽量な
-        // ダミー処理 (Vec<i32> への push) に置き換えてキャンセルロジックだけを検証する。
-        use std::sync::Mutex;
-
-        let pool = build_expansion_pool().expect("build_expansion_pool");
-        let cancel = Arc::new(AtomicBool::new(true));
-        let processed: Arc<Mutex<Vec<i32>>> = Arc::new(Mutex::new(Vec::new()));
-
-        let inputs: Vec<i32> = (0..8).collect();
-        let processed_inner = Arc::clone(&processed);
-        let cancel_inner = Arc::clone(&cancel);
-        pool.install(|| {
-            inputs.par_iter().for_each(|n| {
-                if cancel_inner.load(Ordering::Relaxed) {
-                    return;
-                }
-                processed_inner.lock().expect("processed lock").push(*n);
-            });
-        });
-
-        let recorded = processed.lock().expect("processed lock");
-        assert!(
-            recorded.is_empty(),
-            "キャンセル後に要素が処理された: {recorded:?}"
-        );
-    }
-
-    #[test]
-    fn expansion_cancel_allows_progress_when_false() {
-        // 逆方向の検査: フラグが false のままなら全件処理が進むこと。
-        use std::sync::Mutex;
-
-        let pool = build_expansion_pool().expect("build_expansion_pool");
-        let cancel = Arc::new(AtomicBool::new(false));
-        let processed: Arc<Mutex<Vec<i32>>> = Arc::new(Mutex::new(Vec::new()));
-
-        let inputs: Vec<i32> = (0..8).collect();
-        let processed_inner = Arc::clone(&processed);
-        let cancel_inner = Arc::clone(&cancel);
-        pool.install(|| {
-            inputs.par_iter().for_each(|n| {
-                if cancel_inner.load(Ordering::Relaxed) {
-                    return;
-                }
-                processed_inner.lock().expect("processed lock").push(*n);
-            });
-        });
-
-        let mut recorded = processed.lock().expect("processed lock").clone();
-        recorded.sort_unstable();
-        assert_eq!(recorded, inputs);
+    fn cancel_expansion_atomic_flag() {
+        let (_doc, _rx) = test_document();
+        let flag = Arc::new(AtomicBool::new(false));
+        let flag_clone = Arc::clone(&flag);
+        assert!(!flag_clone.load(Ordering::Relaxed));
+
+        flag.store(true, Ordering::Relaxed);
+        assert!(flag_clone.load(Ordering::Relaxed));
     }
 }

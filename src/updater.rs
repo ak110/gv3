@@ -194,7 +194,12 @@ fn generate_update_batch(
     let extra_copy_commands = extra_files
         .iter()
         .map(|src| {
-            let file_name = src.file_name().unwrap().to_string_lossy();
+            // extra_files は perform_update 経由で「実ファイルのフルパス」が渡される前提で、
+            // 末尾が `..` のような file_name() == None を返すケースは入らない
+            let file_name = src
+                .file_name()
+                .expect("extra_filesにはファイル名を持つパスのみが渡される前提");
+            let file_name = file_name.to_string_lossy();
             let dest = target_dir.join(file_name.as_ref());
             format!(r#"copy /y "{}" "{}""#, src.display(), dest.display())
         })
@@ -261,8 +266,16 @@ del "%~f0" & exit
         update = update_exe.display(),
         target = target_exe.display(),
         old = old_exe.display(),
-        old_name = old_exe.file_name().unwrap().to_string_lossy(),
-        target_name = target_exe.file_name().unwrap().to_string_lossy(),
+        // 呼び出し元 perform_update が exe ファイルの絶対パスから組み立てるため
+        // file_name() は必ず Some を返す前提
+        old_name = old_exe
+            .file_name()
+            .expect("old_exe は target_exe を元に組み立てるためファイル名を持つ前提")
+            .to_string_lossy(),
+        target_name = target_exe
+            .file_name()
+            .expect("target_exe は std::env::current_exe() 由来でファイル名を持つ前提")
+            .to_string_lossy(),
         extra_copy_commands = extra_copy_commands,
     );
 

@@ -42,10 +42,7 @@ impl ArchiveHandler for SusieArchiveHandler {
         target_dir: &Path,
     ) -> Result<Vec<ExtractedEntry>> {
         let path_str = archive_path.to_string_lossy().to_string();
-        let locked = self
-            .plugin
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Mutex poisoned: {e}"))?;
+        let locked = self.plugin.lock().expect("Susie plugin lock poisoned");
 
         // アーカイブ内のエントリ一覧を取得
         let entries = locked.get_archive_info(&path_str)?;

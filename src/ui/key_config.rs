@@ -3,6 +3,11 @@ use std::path::Path;
 
 use anyhow::{Result, bail};
 
+/// 配布版のデフォルトキーバインドTOML。
+/// ビルド時に取り込み、`with_defaults()` のソースとして使う。
+/// パース不能になる事故はビルド時テスト `default_toml_parses_and_resolves` で防止する。
+const DEFAULT_KEYS_TOML: &str = include_str!("../../ぐらびゅ.keys.default.toml");
+
 // --- 入力表現 ---
 
 /// 修飾キーの組み合わせ
@@ -204,19 +209,22 @@ impl KeyConfig {
         if let Some(p) = path
             && let Ok(content) = std::fs::read_to_string(p)
         {
-            if let Ok(config) = Self::parse_toml(&content) {
-                return config;
+            match Self::parse_toml(&content) {
+                Ok(config) => return config,
+                Err(e) => {
+                    eprintln!("キーバインド設定のパースに失敗 ({e})。デフォルトを使用する。");
+                }
             }
-            eprintln!("キーバインド設定のパースに失敗。デフォルトを使用する。");
         }
         Self::with_defaults()
     }
 
-    /// デフォルトバインディングで初期化
+    /// 配布TOMLから取得したデフォルトバインディングで初期化。
+    /// 配布TOMLのパース失敗はビルド時の単体テストで防止しているため、
+    /// ここでは必ず成功する前提で `expect` する。
     pub fn with_defaults() -> Self {
-        Self {
-            bindings: Self::default_bindings(),
-        }
+        Self::parse_toml(DEFAULT_KEYS_TOML)
+            .expect("ぐらびゅ.keys.default.tomlのパースに失敗 (配布物の不整合)")
     }
 
     /// 入力からアクションを検索
@@ -224,17 +232,20 @@ impl KeyConfig {
         self.bindings.get(&chord).copied()
     }
 
-    /// TOMLテキストからパース
+    /// TOMLテキストからパース。
+    /// セクション名を識別し、`[persistent_filter]` 配下のフィールドを `PFilter*` アクションへ解決する。
+    /// 同名フィールド (`levels` 等) が `[filter]` と `[persistent_filter]` で別アクションへ
+    /// 振り分けられるよう、セクション認識を必須とする。
     fn parse_toml(content: &str) -> Result<Self> {
         let table: toml::Table = content.parse()?;
         let mut bindings = HashMap::new();
 
-        for (_section, value) in &table {
+        for (section, value) in &table {
             let Some(section_table) = value.as_table() else {
                 continue;
             };
             for (field, val) in section_table {
-                let Some(action) = field_to_action(field) else {
+                let Some(action) = resolve_action(section, field) else {
                     continue;
                 };
                 let Some(key_str) = val.as_str() else {
@@ -251,7 +262,9 @@ impl KeyConfig {
                             bindings.insert(chord, action);
                         }
                         Err(e) => {
-                            eprintln!("キーバインドパースエラー ({field} = {part:?}): {e}");
+                            eprintln!(
+                                "キーバインドパースエラー ([{section}].{field} = {part:?}): {e}"
+                            );
                         }
                     }
                 }
@@ -260,126 +273,24 @@ impl KeyConfig {
 
         Ok(Self { bindings })
     }
-
-    /// デフォルトのキーバインディング (ぐらびゅ.keys.default.tomlと同期)
-    fn default_bindings() -> HashMap<InputChord, Action> {
-        let mut m = HashMap::new();
-
-        // [navigation] — ぐらびゅ.keys.default.toml と同順
-        bind(&mut m, "←, WheelUp, ↑, Shift+←", Action::NavigateBack);
-        bind(&mut m, "→, WheelDown, ↓, Shift+→", Action::NavigateForward);
-        bind(&mut m, "PageUp", Action::Navigate5Back);
-        bind(&mut m, "PageDown", Action::Navigate5Forward);
-        bind(&mut m, "Ctrl+PageUp", Action::Navigate50Back);
-        bind(&mut m, "Ctrl+PageDown", Action::Navigate50Forward);
-        bind(&mut m, "Ctrl+Home", Action::NavigateFirst);
-        bind(&mut m, "Ctrl+End", Action::NavigateLast);
-        bind(&mut m, "Shift+PageUp", Action::NavigatePrevFolder);
-        bind(&mut m, "Shift+PageDown", Action::NavigateNextFolder);
-        bind(&mut m, "Ctrl+Shift+←", Action::NavigatePrevMark);
-        bind(&mut m, "Ctrl+Shift+→", Action::NavigateNextMark);
-        bind(&mut m, "Ctrl+Space", Action::NavigateToPage);
-        bind(&mut m, "Shift+Tab", Action::SortNavigateBack);
-        bind(&mut m, "Tab", Action::SortNavigateForward);
-
-        // [display]
-        bind(&mut m, "Num /", Action::DisplayAutoShrink);
-        bind(&mut m, "Num *", Action::DisplayAutoFit);
-        bind(&mut m, "Ctrl+Num -, Ctrl+WheelUp", Action::ZoomOut);
-        bind(&mut m, "Ctrl+Num +, Ctrl+WheelDown", Action::ZoomIn);
-        bind(&mut m, "Ctrl+Num0", Action::ZoomReset);
-        bind(&mut m, "Num0", Action::ToggleMargin);
-        bind(&mut m, "A", Action::CycleAlphaBackground);
-
-        // [window]
-        bind(&mut m, "Alt+Enter", Action::ToggleFullscreen);
-        bind(&mut m, "Ctrl+X", Action::Minimize);
-        bind(&mut m, "LeftDoubleClick", Action::ToggleMaximize);
-        bind(&mut m, "Num -", Action::ToggleCursorHide);
-        bind(&mut m, "Esc", Action::ToggleMenuBar);
-        bind(&mut m, "T", Action::ToggleAlwaysOnTop);
-
-        // [file]
-        bind(&mut m, "Ctrl+N", Action::NewWindow);
-        bind(&mut m, "Ctrl+O", Action::OpenFile);
-        bind(&mut m, "Ctrl+Shift+O", Action::OpenFolder);
-        bind(&mut m, "Ctrl+W", Action::CloseAll);
-        bind(&mut m, "F5", Action::Reload);
-        bind(&mut m, "BackSpace", Action::RemoveFromList);
-        bind(&mut m, "Shift+Delete", Action::DeleteFile);
-        bind(&mut m, "Ctrl+R", Action::MoveFile);
-        bind(&mut m, "Ctrl+S", Action::CopyFile);
-        bind(&mut m, "Ctrl+D", Action::OpenContainingFolder);
-        bind(&mut m, "Ctrl+F", Action::CopyFileName);
-        bind(&mut m, "Ctrl+C", Action::CopyImage);
-        bind(&mut m, "Ctrl+V", Action::PasteImage);
-        bind(&mut m, "Ctrl+J", Action::ExportJpg);
-        bind(&mut m, "Ctrl+B", Action::ExportBmp);
-        bind(&mut m, "Ctrl+P", Action::ExportPng);
-        bind(&mut m, "MiddleClick", Action::ShowImageInfo);
-
-        // [mark]
-        bind(&mut m, "Delete", Action::MarkSet);
-        bind(&mut m, "Ctrl+Delete", Action::MarkUnset);
-        bind(&mut m, "Ctrl+Shift+I", Action::MarkInvertAll);
-        bind(&mut m, "Ctrl+BackSpace", Action::MarkedRemoveFromList);
-        bind(&mut m, "Ctrl+Shift+Delete", Action::MarkedDelete);
-        bind(&mut m, "Ctrl+Shift+M", Action::MarkedMove);
-        bind(&mut m, "Ctrl+Shift+C", Action::MarkedCopy);
-
-        // [edit]
-        bind(&mut m, "Enter", Action::DeselectSelection);
-        bind(&mut m, "Ctrl+Shift+X", Action::Crop);
-        bind(&mut m, "Ctrl+↑", Action::Rotate180);
-        bind(&mut m, "Ctrl+→", Action::Rotate90CW);
-        bind(&mut m, "Ctrl+←", Action::Rotate90CCW);
-        bind(&mut m, "Ctrl+↓", Action::RotateArbitrary);
-        bind(&mut m, "Ctrl+Shift+R", Action::Resize);
-
-        // [filter]
-        bind(&mut m, "Ctrl+Shift+F", Action::Fill);
-        bind(&mut m, "Ctrl+L", Action::Levels);
-        bind(&mut m, "Ctrl+M", Action::Mosaic);
-        bind(&mut m, "Ctrl+I", Action::InvertColors);
-        bind(&mut m, "Ctrl+G", Action::GrayscaleStrict);
-
-        // [persistent_filter]
-        bind(&mut m, "Ctrl+Shift+L", Action::PFilterLevels);
-        bind(&mut m, "Ctrl+Shift+G", Action::PFilterGrayscaleSimple);
-
-        // [bookmark]
-        bind(&mut m, "F9", Action::BookmarkSave);
-        bind(&mut m, "F12", Action::BookmarkLoad);
-
-        // [list]
-        bind(&mut m, "F4", Action::ToggleFileList);
-        bind(&mut m, "Ctrl+Shift+S", Action::ShuffleAll);
-        bind(&mut m, "Ctrl+Alt+S", Action::ShuffleGroups);
-
-        // [slideshow]
-        bind(&mut m, "Shift+Space", Action::SlideshowToggle);
-        bind(&mut m, "Shift+↑", Action::SlideshowFaster);
-        bind(&mut m, "Shift+↓", Action::SlideshowSlower);
-
-        // [utility]
-        bind(&mut m, "Shift+M", Action::OpenExeFolder);
-        bind(&mut m, "Shift+B", Action::OpenBookmarkFolder);
-        bind(&mut m, "Shift+S", Action::OpenSpiFolder);
-        bind(&mut m, "Shift+T", Action::OpenTempFolder);
-        bind(&mut m, "F1", Action::ShowHelp);
-
-        m
-    }
 }
 
-/// バインドヘルパー(カンマ区切り対応)
-fn bind(map: &mut HashMap<InputChord, Action>, keys: &str, action: Action) {
-    for part in keys.split(',') {
-        let part = part.trim();
-        if let Ok(chord) = parse_chord(part) {
-            map.insert(chord, action);
-        }
+/// (セクション, フィールド) からアクションを解決する。
+/// `[persistent_filter]` セクションのフィールド名は永続フィルタ系アクションへ解決し、
+/// 他セクションでは `field_to_action` の標準マッピングへ委ねる。
+fn resolve_action(section: &str, field: &str) -> Option<Action> {
+    if section == "persistent_filter" {
+        // `[persistent_filter].levels` → `Action::PFilterLevels` のように
+        // `pfilter_` プレフィックスを補ってから標準マッピングを引く。
+        // すでに `pfilter_` プレフィックス付きのフィールド名が書かれている場合は二重付与を避ける。
+        let canonical = if field.starts_with("pfilter_") {
+            field.to_string()
+        } else {
+            format!("pfilter_{field}")
+        };
+        return field_to_action(&canonical);
     }
+    field_to_action(field)
 }
 
 // --- キー名パーサー ---
@@ -449,7 +360,11 @@ pub fn parse_chord(s: &str) -> Result<InputChord> {
 fn key_name_to_vk(name: &str) -> Result<u16> {
     // 単一の英字・数字
     if name.len() == 1 {
-        let ch = name.chars().next().unwrap();
+        // バイト長1の文字列なので chars().next() は必ず Some を返す。
+        let ch = name
+            .chars()
+            .next()
+            .expect("name.len() == 1 なら chars() は1要素を返す");
         if ch.is_ascii_uppercase() || ch.is_ascii_digit() {
             return Ok(ch as u16);
         }
@@ -932,5 +847,104 @@ zoom_in = "Ctrl+Num +, Ctrl+WheelDown"
         assert_eq!(field_to_action("mark_set"), Some(Action::MarkSet));
         assert_eq!(field_to_action("set"), Some(Action::MarkSet)); // エイリアス
         assert_eq!(field_to_action("unknown_field"), None);
+    }
+
+    /// 配布TOMLが正しくパースでき、主要アクションへ解決されることを保証する。
+    /// `with_defaults()` のフォールバック経路はビルド時にこのテストで担保する。
+    #[test]
+    fn default_toml_parses_and_resolves() {
+        let config = KeyConfig::parse_toml(DEFAULT_KEYS_TOML)
+            .expect("配布版ぐらびゅ.keys.default.tomlのパースに失敗");
+
+        // ナビゲーション
+        assert_eq!(
+            config.lookup(parse_chord("←").unwrap()),
+            Some(Action::NavigateBack)
+        );
+        assert_eq!(
+            config.lookup(parse_chord("Tab").unwrap()),
+            Some(Action::SortNavigateForward)
+        );
+        // 編集
+        assert_eq!(
+            config.lookup(parse_chord("Ctrl+→").unwrap()),
+            Some(Action::Rotate90CW)
+        );
+        // フィルタ
+        assert_eq!(
+            config.lookup(parse_chord("Ctrl+L").unwrap()),
+            Some(Action::Levels)
+        );
+        assert_eq!(
+            config.lookup(parse_chord("Ctrl+G").unwrap()),
+            Some(Action::GrayscaleStrict)
+        );
+        // 永続フィルタ (parse_toml がセクションを認識して PFilter* に振る箇所)
+        assert_eq!(
+            config.lookup(parse_chord("Ctrl+Shift+L").unwrap()),
+            Some(Action::PFilterLevels)
+        );
+        assert_eq!(
+            config.lookup(parse_chord("Ctrl+Shift+G").unwrap()),
+            Some(Action::PFilterGrayscaleSimple)
+        );
+        // ブックマーク・スライドショー
+        assert_eq!(
+            config.lookup(parse_chord("F9").unwrap()),
+            Some(Action::BookmarkSave)
+        );
+        assert_eq!(
+            config.lookup(parse_chord("Shift+Space").unwrap()),
+            Some(Action::SlideshowToggle)
+        );
+    }
+
+    /// `[persistent_filter]` セクションのフィールドが `PFilter*` に解決されることを単独で確認する。
+    /// 旧バグ「セクション無視で `levels` が常に `Action::Levels` へ解決された」の再発防止。
+    #[test]
+    fn persistent_filter_section_resolves_to_pfilter_actions() {
+        let toml = r#"
+[filter]
+levels = "Ctrl+L"
+grayscale_simple = "Ctrl+Alt+L"
+
+[persistent_filter]
+levels = "Ctrl+Shift+L"
+grayscale_simple = "Ctrl+Shift+G"
+"#;
+        let config = KeyConfig::parse_toml(toml).unwrap();
+        // [filter] 配下は通常アクション
+        assert_eq!(
+            config.lookup(parse_chord("Ctrl+L").unwrap()),
+            Some(Action::Levels)
+        );
+        assert_eq!(
+            config.lookup(parse_chord("Ctrl+Alt+L").unwrap()),
+            Some(Action::GrayscaleSimple)
+        );
+        // [persistent_filter] 配下は PFilter* アクション
+        assert_eq!(
+            config.lookup(parse_chord("Ctrl+Shift+L").unwrap()),
+            Some(Action::PFilterLevels)
+        );
+        assert_eq!(
+            config.lookup(parse_chord("Ctrl+Shift+G").unwrap()),
+            Some(Action::PFilterGrayscaleSimple)
+        );
+    }
+
+    /// `[persistent_filter]` 配下にすでに `pfilter_` プレフィックス付きのフィールド名を書いた場合も
+    /// 二重付与せず正しく解決することを確認する。
+    #[test]
+    fn persistent_filter_section_accepts_explicit_prefix() {
+        let toml = r#"
+[persistent_filter]
+pfilter_levels = "Ctrl+Shift+L"
+"#;
+        let config = KeyConfig::parse_toml(toml).unwrap();
+        assert_eq!(
+            config.lookup(parse_chord("Ctrl+Shift+L").unwrap()),
+            Some(Action::PFilterLevels)
+        );
     }
 }

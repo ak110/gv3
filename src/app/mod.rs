@@ -1,6 +1,8 @@
 mod file_ops;
 mod image_edit;
 mod navigation;
+mod panel;
+mod slideshow;
 mod system;
 
 use std::collections::HashSet;
@@ -58,7 +60,7 @@ const VK_MENU: i32 = 0x12; // Alt
 /// - メニューバー・キー入力・ファイルリストパネル等の UI 状態を所有
 /// - `Document` から `DocumentEvent` をチャネル経由で受け取り、再描画や UI 更新を行う
 /// - エラーは `show_error_title` でタイトルバーに表示する (詳細は CLAUDE.md エラー方針)
-pub struct AppWindow {
+pub(crate) struct AppWindow {
     pub(crate) hwnd: HWND,
     pub(crate) document: Document,
     pub(crate) event_receiver: Receiver<DocumentEvent>,
@@ -287,66 +289,6 @@ impl AppWindow {
         available / 2
     }
 
-    /// DocumentEventを処理する
-    fn process_document_events(&mut self) {
-        // 先読みレスポンスを処理 (キャッシュ格納 + current_image更新)
-        self.document.process_prefetch_responses();
-
-        // バックグラウンドコンテナ展開結果を処理
-        self.document.process_expand_results();
-
-        // FileListChanged は同一poll内で複数届きうる (バックグラウンド統合バッチごと等)。
-        // パネル更新コストを抑えるため、ループ中はフラグだけ立て、ループ抜け後に1回だけ
-        // panel.update() を呼ぶ。
-        let mut file_list_changed = false;
-        let mut nav_changed_index: Option<usize> = None;
-        while let Ok(event) = self.event_receiver.try_recv() {
-            match event {
-                DocumentEvent::ImageReady => unsafe {
-                    let _ = InvalidateRect(Some(self.hwnd), None, false);
-                },
-                DocumentEvent::NavigationChanged { index, .. } => {
-                    nav_changed_index = Some(index);
-                }
-                DocumentEvent::FileListChanged => {
-                    self.stop_slideshow();
-                    file_list_changed = true;
-                }
-                DocumentEvent::Error(msg) => {
-                    self.show_error_title(&msg);
-                }
-            }
-        }
-
-        if file_list_changed {
-            let count = self.document.file_list().len();
-            self.file_list_panel.update(count);
-            self.update_title();
-        }
-        if let Some(index) = nav_changed_index {
-            self.update_title();
-            self.file_list_panel.set_selection(index);
-        }
-
-        // パネル表示中ならキャッシュ状態の差分のみ更新 (該当行のみ再描画)
-        if self.file_list_panel.is_visible() {
-            let doc = &self.document;
-            let len = doc.file_list().len();
-            // 現在のキャッシュ状態をスナップショット (上限6件程度なので軽量)
-            let mut new_cached = HashSet::new();
-            for i in 0..len {
-                if doc.is_cached(i) {
-                    new_cached.insert(i);
-                }
-            }
-            // 前回との差分だけ該当行を再描画
-            for &i in self.cached_indices.symmetric_difference(&new_cached) {
-                self.file_list_panel.update_item(i);
-            }
-            self.cached_indices = new_cached;
-        }
-    }
-
     /// タイトルバーを更新
     fn update_title(&self) {
         let title = if let Some(source) = self.document.current_source() {
@@ -498,76 +440,6 @@ impl AppWindow {
                 let _ = ShowWindow(self.hwnd, SW_MAXIMIZE);
             }
         }
-    }
-
-    /// メニューポップアップ表示時にトグル項目のチェック状態を更新
-    fn update_menu_checks(&self, popup: HMENU) {
-        let pf = self.document.persistent_filter();
-        let pf_enabled = pf.is_enabled();
-
-        // 永続フィルタの有効/無効チェック
-        menu::update_menu_check(popup, Action::PFilterToggle, pf_enabled);
-
-        // 各フィルタ操作のチェックマーク + フィルタ無効時はグレーアウト
-        use crate::persistent_filter::FilterOperation as FO;
-        let filter_actions: &[(Action, FO)] = &[
-            (Action::PFilterFlipH, FO::FlipHorizontal),
-            (Action::PFilterFlipV, FO::FlipVertical),
-            (Action::PFilterRotate180, FO::Rotate180),
-            (Action::PFilterRotate90CW, FO::Rotate90CW),
-            (Action::PFilterRotate90CCW, FO::Rotate90CCW),
-            (Action::PFilterLevels, FO::Levels { low: 0, high: 0 }),
-            (Action::PFilterGamma, FO::Gamma { value: 0.0 }),
-            (
-                Action::PFilterBrightnessContrast,
-                FO::BrightnessContrast {
-                    brightness: 0,
-                    contrast: 0,
-                },
-            ),
-            (Action::PFilterGrayscaleSimple, FO::GrayscaleSimple),
-            (Action::PFilterGrayscaleStrict, FO::GrayscaleStrict),
-            (Action::PFilterBlur, FO::Blur),
-            (Action::PFilterBlurStrong, FO::BlurStrong),
-            (Action::PFilterSharpen, FO::Sharpen),
-            (Action::PFilterSharpenStrong, FO::SharpenStrong),
-            (
-                Action::PFilterGaussianBlur,
-                FO::GaussianBlur { radius: 0.0 },
-            ),
-            (Action::PFilterUnsharpMask, FO::UnsharpMask { radius: 0.0 }),
-            (Action::PFilterMedianFilter, FO::MedianFilter),
-            (Action::PFilterInvertColors, FO::InvertColors),
-            (Action::PFilterApplyAlpha, FO::ApplyAlpha),
-        ];
-        for (action, probe) in filter_actions {
-            menu::update_menu_check(popup, *action, pf.has_operation(probe));
-            menu::update_menu_enabled(popup, *action, pf_enabled);
-        }
-
-        // その他のトグル項目
-        menu::update_menu_check(
-            popup,
-            Action::ToggleFileList,
-            self.file_list_panel.is_visible(),
-        );
-        menu::update_menu_check(popup, Action::ToggleAlwaysOnTop, self.always_on_top);
-        menu::update_menu_check(
-            popup,
-            Action::ToggleMargin,
-            self.renderer.layout().margin_enabled,
-        );
-        menu::update_menu_check(
-            popup,
-            Action::ToggleCursorHide,
-            self.cursor_hider.is_enabled(),
-        );
-        menu::update_menu_check(
-            popup,
-            Action::ToggleFullscreen,
-            self.fullscreen.is_fullscreen(),
-        );
-        menu::update_menu_check(popup, Action::SlideshowToggle, self.slideshow_active);
     }
 
     // --- WndProc ---
@@ -980,84 +852,6 @@ impl AppWindow {
         }
     }
 
-    /// ListView (file_list_panel) からの WM_NOTIFY を処理する
-    fn handle_file_list_notify(&mut self, nmhdr: &NMHDR, lparam: LPARAM) -> LRESULT {
-        match nmhdr.code {
-            // テキスト要求: 該当インデックスのラベルを ListView 提供のバッファへコピー
-            i if i == LVN_GETDISPINFOW => {
-                // SAFETY: LVN_GETDISPINFOW の lparam は OS が有効な NMLVDISPINFOW へのポインタを保証する
-                let dispinfo = unsafe { &mut *(lparam.0 as *mut NMLVDISPINFOW) };
-                if (dispinfo.item.mask & LVIF_TEXT).0 != 0 {
-                    let idx = dispinfo.item.iItem as usize;
-                    let files = self.document.file_list().files();
-                    if let Some(info) = files.get(idx) {
-                        let is_cached = self.document.is_cached(idx);
-                        let label = FileListPanel::format_label(info, is_cached);
-                        // UTF-16 化して、ListView 提供の pszText バッファへコピー
-                        let max = dispinfo.item.cchTextMax as usize;
-                        if max > 0 && !dispinfo.item.pszText.0.is_null() {
-                            let mut wide: Vec<u16> = label.encode_utf16().collect();
-                            // ヌル終端1文字分を残して切り詰める
-                            if wide.len() >= max {
-                                wide.truncate(max - 1);
-                            }
-                            wide.push(0);
-                            // SAFETY: pszText は OS が確保した cchTextMax 文字分のバッファを指す。
-                            // wide.len() <= max (cchTextMax) を上記で保証済みのため範囲内に収まる。
-                            unsafe {
-                                std::ptr::copy_nonoverlapping(
-                                    wide.as_ptr(),
-                                    dispinfo.item.pszText.0,
-                                    wide.len(),
-                                );
-                            }
-                        }
-                    }
-                }
-                LRESULT(0)
-            }
-            // 選択変更通知: ユーザーのクリック・マウスホイール等で iItem が変わった
-            i if i == LVN_ITEMCHANGED => {
-                // SAFETY: LVN_ITEMCHANGED の lparam は OS が有効な NMLISTVIEW へのポインタを保証する
-                let nmlv = unsafe { &*(lparam.0 as *const NMLISTVIEW) };
-                // 状態変化のうち SELECTED ビットが新たに立ったときだけ反応
-                let became_selected = (nmlv.uChanged.0 & LVIF_STATE.0) != 0
-                    && (nmlv.uOldState & LVIS_SELECTED.0) == 0
-                    && (nmlv.uNewState & LVIS_SELECTED.0) != 0;
-                if became_selected && nmlv.iItem >= 0 {
-                    let target = nmlv.iItem as usize;
-                    if self.document.file_list().current_index() != Some(target) {
-                        if !self.guard_unsaved_edit() {
-                            // キャンセル時は選択位置を復元
-                            if let Some(idx) = self.document.file_list().current_index() {
-                                self.file_list_panel.set_selection(idx);
-                            }
-                            return LRESULT(0);
-                        }
-                        self.selection.deselect();
-                        self.stop_slideshow();
-                        self.document.navigate_to(target);
-                        self.process_document_events();
-                    }
-                }
-                LRESULT(0)
-            }
-            _ => LRESULT(0),
-        }
-    }
-
-    /// ファイルリストパネルの同期ヘルパー(MarkInvertAll / MarkInvertToHere で共通)
-    fn sync_file_list_panel(&mut self) {
-        if self.file_list_panel.is_visible() {
-            let doc = &self.document;
-            let len = doc.file_list().len();
-            self.file_list_panel.update(len);
-            if let Some(idx) = doc.file_list().current_index() {
-                self.file_list_panel.set_selection(idx);
-            }
-        }
-    }
-
     /// アクションを実行する
     fn execute_action(&mut self, action: Action) {
         // スライドショー中は、スライドショー関連以外のアクションで自動停止
@@ -1445,87 +1239,6 @@ impl AppWindow {
             result.push(c);
         }
         result
-    }
-
-    // --- スライドショー ---
-
-    /// スライドショーを開始/停止する
-    fn toggle_slideshow(&mut self) {
-        if self.slideshow_active {
-            self.stop_slideshow();
-        } else {
-            self.start_slideshow();
-        }
-    }
-
-    /// スライドショー開始
-    fn start_slideshow(&mut self) {
-        if self.document.file_list().len() < 2 {
-            return;
-        }
-        self.slideshow_active = true;
-        unsafe {
-            let _ = SetTimer(
-                Some(self.hwnd),
-                TIMER_ID_SLIDESHOW,
-                self.slideshow_interval_ms,
-                None,
-            );
-        }
-    }
-
-    /// スライドショー停止
-    fn stop_slideshow(&mut self) {
-        if !self.slideshow_active {
-            return;
-        }
-        self.slideshow_active = false;
-        unsafe {
-            let _ = KillTimer(Some(self.hwnd), TIMER_ID_SLIDESHOW);
-        }
-    }
-
-    /// スライドショーのタイマー発火時
-    fn on_slideshow_timer(&mut self) {
-        if !self.slideshow_active {
-            return;
-        }
-        // 最後の画像に到達しているか確認
-        let at_end = self
-            .document
-            .file_list()
-            .current_index()
-            .is_some_and(|idx| idx + 1 >= self.document.file_list().len());
-
-        if at_end {
-            if self.slideshow_repeat {
-                self.document.navigate_first();
-                self.process_document_events();
-            } else {
-                self.stop_slideshow();
-            }
-            return;
-        }
-        self.document.navigate_relative(1);
-        self.process_document_events();
-    }
-
-    /// スライドショー間隔を変更 (最小500ms、最大30000ms)
-    fn adjust_slideshow_interval(&mut self, delta_ms: i32) {
-        let new_val =
-            (i64::from(self.slideshow_interval_ms) + i64::from(delta_ms)).clamp(500, 30_000) as u32;
-        self.slideshow_interval_ms = new_val;
-        // 実行中ならタイマーを新しい間隔で再設定 (同一IDは上書き)
-        if self.slideshow_active {
-            unsafe {
-                let _ = SetTimer(
-                    Some(self.hwnd),
-                    TIMER_ID_SLIDESHOW,
-                    self.slideshow_interval_ms,
-                    None,
-                );
-            }
-        }
     }
 
     /// 画像情報を表示する

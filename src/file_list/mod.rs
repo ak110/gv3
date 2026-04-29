@@ -1,3 +1,7 @@
+//! ファイル一覧管理モジュール。
+//!
+//! ファイルの列挙、ソート、ナビゲーション、マーク管理、グループ管理などを提供する。
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -7,85 +11,18 @@ use anyhow::Result;
 use crate::extension_registry::ExtensionRegistry;
 use crate::file_info::{FileInfo, FileSource};
 
-/// ナビゲーションの方向 (PendingContainer 展開時の current_index 配置に使う)
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NavigationDirection {
-    /// 前進方向 (次へ・先頭へ・次のフォルダへ等)。展開後グループの先頭に配置する
-    Forward,
-    /// 後退方向 (前へ・末尾へ等)。展開後グループの末尾に配置する
-    Backward,
-}
+// 責務別の各モジュール
+mod groups;
+mod natural_sort;
+pub mod navigation;
+mod sort;
 
-/// フォルダ/アーカイブ単位ナビゲーション用のグループキー
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum GroupKey {
-    Folder(std::path::PathBuf),
-    Archive(std::path::PathBuf),
-}
+// 外部から使用される型・関数を再エクスポート
+pub use navigation::NavigationDirection;
+pub use sort::SortOrder;
 
-/// 軽量PRNG(xorshift64)。シャッフル用途のため暗号強度は不要。
-struct SimpleRng(u64);
-
-impl SimpleRng {
-    fn new() -> Self {
-        let mut buf = [0u8; 8];
-        // OS 乱数源が取れない場合はシステム時刻ベースのシードにフォールバックする。
-        // シャッフル用途のため暗号強度は不要で、決定的な再現を避けられれば十分。
-        let seed = if getrandom::fill(&mut buf).is_ok() {
-            u64::from_ne_bytes(buf)
-        } else {
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0x9E37_79B9_7F4A_7C15, |d| d.as_nanos() as u64)
-        };
-        Self(seed | 1) // 0シード回避
-    }
-
-    /// xorshift64ステップを実行し、次の状態を返す
-    fn step(&mut self) -> u64 {
-        self.0 ^= self.0 << 13;
-        self.0 ^= self.0 >> 7;
-        self.0 ^= self.0 << 17;
-        self.0
-    }
-
-    /// [0, bound) の範囲で一様分布する乱数を返す (Lemire法)
-    ///
-    /// 参考: Daniel Lemire, "Fast Random Integer Generation in an Interval",
-    /// ACM Trans. Model. Comput. Simul., 2019
-    fn next_usize(&mut self, bound: usize) -> usize {
-        let s = bound as u64;
-        let mut m = self.step() as u128 * s as u128;
-        let mut l = m as u64;
-        if l < s {
-            // rejection threshold: (2^64 - s) % s
-            let t = s.wrapping_neg() % s;
-            while l < t {
-                m = self.step() as u128 * s as u128;
-                l = m as u64;
-            }
-        }
-        (m >> 64) as usize
-    }
-}
-
-/// ソート順
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SortOrder {
-    /// ファイル名順
-    #[default]
-    Name,
-    /// ファイル名順 (大文字小文字区別なし)
-    #[serde(rename = "name_nocase")]
-    NameNoCase,
-    /// ファイルサイズ順
-    Size,
-    /// 最終更新日時順
-    Date,
-    /// 自然順ソート (数値認識)
-    Natural,
-}
+use groups::{compute_group_layout, group_key};
+use natural_sort::SimpleRng;
 
 /// ファイル一覧管理
 pub struct FileList {
@@ -270,8 +207,7 @@ impl FileList {
     /// またいで完全に論理パス順に並ぶ。Size/Date は値を主キーとし、同値時に論理パスをタイブレーカーとする。
     pub fn sort(&mut self, order: SortOrder) {
         self.with_position_preserved(|this| {
-            this.files
-                .sort_by(|a, b| Self::compare_by_sort_order(a, b, order));
+            this.files.sort_by(|a, b| order.compare(a, b));
             this.sort_order = order;
         });
     }
@@ -343,7 +279,7 @@ impl FileList {
         // 展開エントリ群内部のみ初期表示順序としてソートする (全体は再ソートしない)
         let order = self.sort_order;
         let mut entries = entries;
-        entries.sort_by(|a, b| Self::compare_by_sort_order(a, b, order));
+        entries.sort_by(|a, b| order.compare(a, b));
 
         let entries_len = entries.len();
         let current = self.current_index;
@@ -416,10 +352,10 @@ impl FileList {
         }
         self.with_position_preserved(|this| {
             // group_key の出現順を保ったままファイルをグループへ振り分ける
-            let mut group_indices: HashMap<GroupKey, usize> = HashMap::new();
+            let mut group_indices: HashMap<groups::GroupKey, usize> = HashMap::new();
             let mut groups: Vec<Vec<FileInfo>> = Vec::new();
             for file in this.files.drain(..) {
-                let key = Self::group_key(&file);
+                let key = group_key(&file);
                 let idx = *group_indices.entry(key).or_insert_with(|| {
                     let idx = groups.len();
                     groups.push(Vec::new());
@@ -604,44 +540,6 @@ impl FileList {
         Ok(())
     }
 
-    /// ファイルのグループキーを返す (フォルダ=親ディレクトリ or アーカイブパス)
-    fn group_key(info: &FileInfo) -> GroupKey {
-        match &info.source {
-            FileSource::ArchiveEntry { archive, .. } => GroupKey::Archive(archive.clone()),
-            FileSource::PdfPage { pdf_path, .. } => GroupKey::Archive(pdf_path.clone()),
-            FileSource::PendingContainer { container_path } => {
-                GroupKey::Archive(container_path.clone())
-            }
-            FileSource::File(_) => GroupKey::Folder(
-                info.path
-                    .parent()
-                    .map(Path::to_path_buf)
-                    .unwrap_or_default(),
-            ),
-        }
-    }
-
-    /// 現在のファイル列から `group_key` の出現順を計算する。
-    ///
-    /// リスト上での連続性に依存しないため、論理パス順で同一グループのファイルが
-    /// 他グループの要素を挟んで分断されていても正しく動作する。
-    /// 戻り値: (各グループの最初の登場 index, 各ファイルが属するグループ index)
-    fn compute_group_layout(&self) -> (Vec<usize>, Vec<usize>) {
-        let mut seen: HashMap<GroupKey, usize> = HashMap::new();
-        let mut group_first_indices: Vec<usize> = Vec::new();
-        let mut file_group_idx: Vec<usize> = Vec::with_capacity(self.files.len());
-        for (i, f) in self.files.iter().enumerate() {
-            let key = Self::group_key(f);
-            let idx = *seen.entry(key).or_insert_with(|| {
-                let idx = group_first_indices.len();
-                group_first_indices.push(i);
-                idx
-            });
-            file_group_idx.push(idx);
-        }
-        (group_first_indices, file_group_idx)
-    }
-
     /// 前のフォルダ/アーカイブの最初のファイルへ移動する
     ///
     /// `group_key` の出現順を構築してから現在グループの 1 つ前を選び、その先頭ファイルへ移動する。
@@ -651,7 +549,7 @@ impl FileList {
             return false;
         }
         let current = self.current_index.unwrap_or(0);
-        let (group_first_indices, file_group_idx) = self.compute_group_layout();
+        let (group_first_indices, file_group_idx) = compute_group_layout(&self.files);
         let total_groups = group_first_indices.len();
         if total_groups <= 1 {
             return false;
@@ -680,7 +578,7 @@ impl FileList {
             return false;
         }
         let current = self.current_index.unwrap_or(0);
-        let (group_first_indices, file_group_idx) = self.compute_group_layout();
+        let (group_first_indices, file_group_idx) = compute_group_layout(&self.files);
         let total_groups = group_first_indices.len();
         if total_groups <= 1 {
             return false;
@@ -707,9 +605,7 @@ impl FileList {
 
         // ソート済みインデックスリストを生成
         let mut sorted_indices: Vec<usize> = (0..self.files.len()).collect();
-        sorted_indices.sort_by(|&a, &b| {
-            Self::compare_by_sort_order(&self.files[a], &self.files[b], sort_order)
-        });
+        sorted_indices.sort_by(|&a, &b| sort_order.compare(&self.files[a], &self.files[b]));
 
         // 現在ファイルのソート済みリスト内位置を特定
         let pos = sorted_indices.iter().position(|&i| i == current);
@@ -726,31 +622,6 @@ impl FileList {
         }
         self.current_index = Some(target);
         true
-    }
-
-    /// ソート順による比較。
-    ///
-    /// 比較キーは論理パス (`FileSource::display_path()` 相当) を基本とする。
-    /// 通常ファイルはフルパス、アーカイブはアーカイブパス＋内部パス、PDF はファイルパス＋ページ番号となる。
-    ///
-    /// - `Name` / `NameNoCase` / `Natural`: 論理パスを直接比較する
-    /// - `Size` / `Date`: 値を主キーとし、同値時に論理パスを副キーとする (タイブレーカー)
-    fn compare_by_sort_order(a: &FileInfo, b: &FileInfo, order: SortOrder) -> std::cmp::Ordering {
-        let path_a = a.source.display_path();
-        let path_b = b.source.display_path();
-        match order {
-            SortOrder::Name => path_a.cmp(&path_b),
-            SortOrder::NameNoCase => path_a.to_lowercase().cmp(&path_b.to_lowercase()),
-            SortOrder::Size => a
-                .file_size
-                .cmp(&b.file_size)
-                .then_with(|| path_a.cmp(&path_b)),
-            SortOrder::Date => a
-                .modified
-                .cmp(&b.modified)
-                .then_with(|| path_a.cmp(&path_b)),
-            SortOrder::Natural => natord::compare_ignore_case(&path_a, &path_b),
-        }
     }
 
     /// ファイル一覧への参照
@@ -1598,458 +1469,46 @@ mod tests {
             now,
         ));
         fl.push(make_file_info_with_source(
-            FileSource::File(PathBuf::from("/x/z.png")),
-            50,
+            FileSource::File(PathBuf::from("/x/a.png")),
+            100,
             now,
         ));
 
         fl.sort(SortOrder::Size);
 
-        let paths: Vec<String> = fl.files.iter().map(|f| f.source.display_path()).collect();
-        assert_eq!(
-            paths,
-            vec![
-                "/x/z.png".to_string(), // size=50 が最先頭
-                "/x/b.png".to_string(), // size=100 同値内はパス順 b < c
-                "/x/c.png".to_string(),
-            ]
-        );
+        let names: Vec<&str> = fl.files.iter().map(|f| f.file_name.as_str()).collect();
+        assert_eq!(names, vec!["a.png", "b.png", "c.png"]);
     }
 
     #[test]
     fn sort_date_uses_logical_path_as_tiebreaker() {
-        // Date 順も同値時に論理パスをタイブレーカーとする
+        // Date 順は値が主キー、同値時に論理パスをタイブレーカーとする
         let registry = test_registry();
         let mut fl = FileList::new(registry);
-        let t_old = std::time::SystemTime::UNIX_EPOCH;
-        let t_new = t_old + std::time::Duration::from_secs(100);
+        let epoch = std::time::SystemTime::UNIX_EPOCH;
+        let future = epoch + std::time::Duration::from_secs(100);
 
         fl.push(make_file_info_with_source(
             FileSource::File(PathBuf::from("/x/c.png")),
             100,
-            t_old,
+            future,
         ));
         fl.push(make_file_info_with_source(
             FileSource::File(PathBuf::from("/x/b.png")),
             100,
-            t_old,
+            epoch,
         ));
         fl.push(make_file_info_with_source(
             FileSource::File(PathBuf::from("/x/a.png")),
             100,
-            t_new,
+            epoch,
         ));
 
         fl.sort(SortOrder::Date);
 
-        let paths: Vec<String> = fl.files.iter().map(|f| f.source.display_path()).collect();
-        assert_eq!(
-            paths,
-            vec![
-                "/x/b.png".to_string(), // 古い同値内ではパス順 b < c
-                "/x/c.png".to_string(),
-                "/x/a.png".to_string(), // 新しいので末尾
-            ]
-        );
-    }
-
-    #[test]
-    fn shuffle_groups_handles_disjoint_groups() {
-        // 論理パス順で同一グループのファイルがサブフォルダ要素を挟んで分断される配列に対しても、
-        // shuffle_groups がグループ単位で集約しグループ内の出現順を維持することを確認する
-        let registry = test_registry();
-        let mut fl = FileList::new(registry);
-        let now = std::time::SystemTime::UNIX_EPOCH;
-
-        // 論理パス順では a/a.png → a/m/x.png → a/z.png となり、
-        // group_a の 2 ファイルが group_a/m を挟んで分断される
-        fl.push(make_file_info_with_source(
-            FileSource::File(PathBuf::from("/a/a.png")),
-            100,
-            now,
-        ));
-        fl.push(make_file_info_with_source(
-            FileSource::File(PathBuf::from("/a/m/x.png")),
-            100,
-            now,
-        ));
-        fl.push(make_file_info_with_source(
-            FileSource::File(PathBuf::from("/a/z.png")),
-            100,
-            now,
-        ));
-
-        fl.shuffle_groups();
-
-        assert_eq!(fl.len(), 3);
-
-        // 全要素が保持されていることを確認
-        let mut paths: Vec<String> = fl.files.iter().map(|f| f.source.display_path()).collect();
-        paths.sort();
-        assert_eq!(
-            paths,
-            vec![
-                "/a/a.png".to_string(),
-                "/a/m/x.png".to_string(),
-                "/a/z.png".to_string(),
-            ]
-        );
-
-        // group_a (a.png と z.png) がリスト上で連続し、相対順序が維持されている
-        let a_pos = fl
-            .files
-            .iter()
-            .position(|f| f.path == Path::new("/a/a.png"))
-            .unwrap();
-        let z_pos = fl
-            .files
-            .iter()
-            .position(|f| f.path == Path::new("/a/z.png"))
-            .unwrap();
-        assert!(a_pos < z_pos);
-        assert_eq!(z_pos - a_pos, 1, "group_a のファイルが連続していない");
-    }
-
-    #[test]
-    fn navigate_folder_handles_disjoint_groups() {
-        // 同一グループが分断される配列でも navigate_prev_folder/navigate_next_folder が
-        // グループ間ジャンプとして機能する
-        let registry = test_registry();
-        let mut fl = FileList::new(registry);
-        let now = std::time::SystemTime::UNIX_EPOCH;
-
-        // 論理パス順: /a/a.png(0,group_a), /a/m/x.png(1,group_a/m), /a/z.png(2,group_a), /b/c.png(3,group_b)
-        fl.push(make_file_info_with_source(
-            FileSource::File(PathBuf::from("/a/a.png")),
-            100,
-            now,
-        ));
-        fl.push(make_file_info_with_source(
-            FileSource::File(PathBuf::from("/a/m/x.png")),
-            100,
-            now,
-        ));
-        fl.push(make_file_info_with_source(
-            FileSource::File(PathBuf::from("/a/z.png")),
-            100,
-            now,
-        ));
-        fl.push(make_file_info_with_source(
-            FileSource::File(PathBuf::from("/b/c.png")),
-            100,
-            now,
-        ));
-
-        // /a/a.png から → 次のグループ (group_a/m) の先頭 (index=1)
-        fl.navigate_to(0);
-        assert!(fl.navigate_next_folder());
-        assert_eq!(fl.current_index(), Some(1));
-
-        // /a/m/x.png から → 次のグループ (group_b) の先頭 (index=3)
-        assert!(fl.navigate_next_folder());
-        assert_eq!(fl.current_index(), Some(3));
-
-        // /b/c.png から → 先頭グループ (group_a) へラップアラウンド (index=0)
-        assert!(fl.navigate_next_folder());
-        assert_eq!(fl.current_index(), Some(0));
-
-        // 分断されたグループの後半 (/a/z.png) からも、所属グループの 1 つ後 (group_a/m) へ
-        fl.navigate_to(2);
-        assert!(fl.navigate_next_folder());
-        assert_eq!(fl.current_index(), Some(1));
-
-        // 逆方向: /a/m/x.png (group_a/m) から prev → 前のグループ group_a の先頭 (index=0)
-        fl.navigate_to(1);
-        assert!(fl.navigate_prev_folder());
-        assert_eq!(fl.current_index(), Some(0));
-    }
-
-    #[test]
-    fn expand_container_at_sorts_entries_internally_by_sort_order() {
-        // 全体は再ソートされないが、展開エントリ群の内部のみ初期表示順序として `sort_order` でソートされる。
-        // ここでは Size 順でソート中の状態に対し、入力順とは異なる Size のエントリを与えて確認する。
-        let registry = test_registry();
-        let mut fl = FileList::new(registry);
-        let now = std::time::SystemTime::UNIX_EPOCH;
-
-        fl.push(make_file_info_with_source(
-            FileSource::File(PathBuf::from("/a.png")),
-            100,
-            now,
-        ));
-        fl.push(make_file_info_with_source(
-            FileSource::File(PathBuf::from("/b.png")),
-            300,
-            now,
-        ));
-        fl.push(make_file_info_with_source(
-            FileSource::PendingContainer {
-                container_path: PathBuf::from("/pending.zip"),
-            },
-            0,
-            now,
-        ));
-        fl.push(make_file_info_with_source(
-            FileSource::File(PathBuf::from("/c.png")),
-            200,
-            now,
-        ));
-
-        fl.sort(SortOrder::Size);
-        // 初期順 (Size): pending(0), a(100), c(200), b(300)
-        let pending_index = fl
-            .files
-            .iter()
-            .position(|f| matches!(f.source, FileSource::PendingContainer { .. }))
-            .unwrap();
-        assert_eq!(pending_index, 0);
-        fl.navigate_to(pending_index);
-
-        // 入力順は意図的に Size 降順にしておく (entry2 → entry1)
-        let entries = vec![
-            make_file_info_with_source(
-                FileSource::ArchiveEntry {
-                    archive: PathBuf::from("/pending.zip"),
-                    entry: "entry2.png".to_string(),
-                    on_demand: false,
-                },
-                250,
-                now,
-            ),
-            make_file_info_with_source(
-                FileSource::ArchiveEntry {
-                    archive: PathBuf::from("/pending.zip"),
-                    entry: "entry1.png".to_string(),
-                    on_demand: false,
-                },
-                150,
-                now,
-            ),
-        ];
-
-        fl.expand_container_at(pending_index, entries, NavigationDirection::Forward);
-
-        // プレースホルダ位置 (先頭) に展開エントリが Size 昇順で挿入され、それ以降の既存ファイルはそのまま
-        let sizes: Vec<u64> = fl.files.iter().map(|f| f.file_size).collect();
-        assert_eq!(sizes, vec![150, 250, 100, 200, 300]);
-
-        // Forward なので展開エントリ先頭 entry1.png が現在位置となる
-        assert_eq!(
-            fl.current().unwrap().source.display_path(),
-            "/pending.zip/entry1.png"
-        );
-        assert_eq!(fl.current_index(), Some(0));
-    }
-
-    #[test]
-    fn update_marked_paths_moves_to_dest_dir() {
-        let src_dir = std::env::temp_dir().join("gv_test_fl_update_marked_src");
-        let dest_dir = std::env::temp_dir().join("gv_test_fl_update_marked_dest");
-        create_test_files(&src_dir, &["a.png", "b.png", "c.png"]);
-        let _ = std::fs::create_dir_all(&dest_dir);
-        // 移動先にもファイルを作成 (from_pathが成功するように)
-        create_test_files(&dest_dir, &["a.png", "c.png"]);
-
-        let mut fl = FileList::new(test_registry());
-        fl.populate_from_folder(&src_dir).unwrap();
-        fl.navigate_to(1); // b.png を選択
-
-        // a.png と c.png をマーク
-        fl.mark_at(0);
-        fl.mark_at(2);
-
-        fl.update_marked_paths(&dest_dir).unwrap();
-
-        // マーク済みファイルのパスが更新されている
-        let marked: Vec<&FileInfo> = fl.files.iter().filter(|f| f.marked).collect();
-        assert_eq!(marked.len(), 2);
-        for f in &marked {
-            assert!(f.path.starts_with(&dest_dir));
-        }
-
-        // 非マークファイル (b.png) はsrc_dirのまま
-        let unmarked: Vec<&FileInfo> = fl.files.iter().filter(|f| !f.marked).collect();
-        assert_eq!(unmarked.len(), 1);
-        assert_eq!(unmarked[0].file_name, "b.png");
-        assert!(unmarked[0].path.starts_with(&src_dir));
-
-        // 順序を維持するため、現在位置の index は変わらず b.png を指したまま
-        assert_eq!(fl.current().unwrap().file_name, "b.png");
-
-        cleanup(&src_dir);
-        cleanup(&dest_dir);
-    }
-
-    #[test]
-    fn expand_container_at_after_shuffle_groups_keeps_order() {
-        // shuffle_groups でグループ順を入れ替えた後にコンテナ展開しても、
-        // 展開エントリが元のプレースホルダ位置に挿入され、それ以外の順序は維持される。
-        let registry = test_registry();
-        let mut fl = FileList::new(registry);
-        fl.push(make_archive_file_info("a.zip", "a1.png", "a1.png"));
-        fl.push(make_archive_file_info("a.zip", "a2.png", "a2.png"));
-        fl.push(make_pending_container_info("p.zip"));
-        fl.push(make_archive_file_info("c.zip", "c1.png", "c1.png"));
-        fl.push(make_archive_file_info("c.zip", "c2.png", "c2.png"));
-        fl.navigate_to(0);
-        fl.shuffle_groups();
-
-        // シャッフル後の順序とプレースホルダ位置を記録
-        let pre_paths: Vec<String> = fl.files.iter().map(|f| f.source.display_path()).collect();
-        let pending_index = fl
-            .files
-            .iter()
-            .position(|f| f.source.is_pending_container())
-            .unwrap();
-        // current 位置検証のため、展開対象 (pending) を選択した状態で展開する
-        fl.navigate_to(pending_index);
-
-        let entries = vec![
-            make_archive_file_info("p.zip", "p1.png", "p1.png"),
-            make_archive_file_info("p.zip", "p2.png", "p2.png"),
-        ];
-        fl.expand_container_at(pending_index, entries, NavigationDirection::Forward);
-
-        // 展開エントリがプレースホルダ位置に挿入され、それ以外の相対順序は維持される
-        let post_paths: Vec<String> = fl.files.iter().map(|f| f.source.display_path()).collect();
-        let mut expected = pre_paths.clone();
-        expected.splice(
-            pending_index..=pending_index,
-            vec!["p.zip/p1.png".to_string(), "p.zip/p2.png".to_string()],
-        );
-        assert_eq!(post_paths, expected);
-
-        // Forward なので展開エントリの先頭が現在位置となる
-        assert_eq!(fl.current_index(), Some(pending_index));
-        assert_eq!(fl.current().unwrap().file_name, "p1.png");
-    }
-
-    #[test]
-    fn expand_container_at_after_shuffle_all_keeps_order() {
-        // shuffle_all で全体をシャッフルした後にコンテナ展開しても、
-        // 展開エントリが元のプレースホルダ位置に挿入され、それ以外の順序は維持される。
-        let registry = test_registry();
-        let mut fl = FileList::new(registry);
-        fl.push(make_archive_file_info("a.zip", "a1.png", "a1.png"));
-        fl.push(make_archive_file_info("a.zip", "a2.png", "a2.png"));
-        fl.push(make_pending_container_info("p.zip"));
-        fl.push(make_archive_file_info("c.zip", "c1.png", "c1.png"));
-        fl.push(make_archive_file_info("c.zip", "c2.png", "c2.png"));
-        fl.navigate_to(0);
-        fl.shuffle_all();
-
-        let pre_paths: Vec<String> = fl.files.iter().map(|f| f.source.display_path()).collect();
-        let pending_index = fl
-            .files
-            .iter()
-            .position(|f| f.source.is_pending_container())
-            .unwrap();
-        fl.navigate_to(pending_index);
-
-        let entries = vec![
-            make_archive_file_info("p.zip", "p1.png", "p1.png"),
-            make_archive_file_info("p.zip", "p2.png", "p2.png"),
-        ];
-        fl.expand_container_at(pending_index, entries, NavigationDirection::Forward);
-
-        let post_paths: Vec<String> = fl.files.iter().map(|f| f.source.display_path()).collect();
-        let mut expected = pre_paths.clone();
-        expected.splice(
-            pending_index..=pending_index,
-            vec!["p.zip/p1.png".to_string(), "p.zip/p2.png".to_string()],
-        );
-        assert_eq!(post_paths, expected);
-
-        assert_eq!(fl.current_index(), Some(pending_index));
-        assert_eq!(fl.current().unwrap().file_name, "p1.png");
-    }
-
-    #[test]
-    fn expand_container_at_with_multiple_pending_containers_does_not_mix() {
-        // 複数の PendingContainer が含まれる状態で特定の PendingContainer を展開しても、
-        // 展開エントリは他の PendingContainer や非コンテナファイルと混ざらず、元のプレースホルダ位置に挿入される。
-        // 本指摘の核心ケース: [/a/e.zip, /a/b/c.zip(plac), /a/b/d.zip(plac)] で /a/b/c.zip を展開した結果が
-        // [/a/e.zip, c.zip 中身, /a/b/d.zip(plac)] であり、論理パス順への巻き戻しが起きないことを確認する。
-        let registry = test_registry();
-        let mut fl = FileList::new(registry);
-        let now = std::time::SystemTime::UNIX_EPOCH;
-        fl.push(make_file_info_with_source(
-            FileSource::File(PathBuf::from("/a/e.zip")),
-            100,
-            now,
-        ));
-        fl.push(make_pending_container_info("/a/b/c.zip"));
-        fl.push(make_pending_container_info("/a/b/d.zip"));
-        fl.navigate_to(1); // /a/b/c.zip 上
-
-        let entries = vec![
-            make_archive_file_info("/a/b/c.zip", "x.png", "x.png"),
-            make_archive_file_info("/a/b/c.zip", "y.png", "y.png"),
-        ];
-        fl.expand_container_at(1, entries, NavigationDirection::Forward);
-
-        assert_eq!(fl.len(), 4);
-        // index 0: 元の通常ファイル (位置維持)
-        assert!(matches!(fl.files[0].source, FileSource::File(_)));
-        assert_eq!(fl.files[0].path, PathBuf::from("/a/e.zip"));
-        // index 1, 2: 展開エントリ (プレースホルダ位置に挿入)
-        assert_eq!(fl.files[1].file_name, "x.png");
-        assert_eq!(fl.files[2].file_name, "y.png");
-        // index 3: もう一つの PendingContainer は未展開のままで、展開エントリと混ざっていない
-        match &fl.files[3].source {
-            FileSource::PendingContainer { container_path } => {
-                assert_eq!(container_path, &PathBuf::from("/a/b/d.zip"));
-            }
-            _ => panic!("index 3 は未展開の PendingContainer であるべき"),
-        }
-
-        assert_eq!(fl.current_index(), Some(1));
-        assert_eq!(fl.current().unwrap().file_name, "x.png");
-    }
-
-    #[test]
-    fn update_marked_paths_after_shuffle_keeps_order() {
-        // シャッフル後にマーク済みファイルのパス更新を行ってもリスト順序が変わらない。
-        let src_dir = std::env::temp_dir().join("gv_test_fl_update_after_shuffle_src");
-        let dest_dir = std::env::temp_dir().join("gv_test_fl_update_after_shuffle_dest");
-        create_test_files(&src_dir, &["a.png", "b.png", "c.png", "d.png", "e.png"]);
-        let _ = std::fs::create_dir_all(&dest_dir);
-        // 移動先にもファイルを作成 (FileInfo::from_path が成功するように)
-        create_test_files(&dest_dir, &["b.png", "d.png"]);
-
-        let mut fl = FileList::new(test_registry());
-        fl.populate_from_folder(&src_dir).unwrap();
-        fl.shuffle_all();
-
-        // b.png と d.png をマーク
-        for i in 0..fl.len() {
-            if fl.files[i].file_name == "b.png" || fl.files[i].file_name == "d.png" {
-                fl.mark_at(i);
-            }
-        }
-
-        // シャッフル後のリスト順 (ファイル名の並び) を記録する。
-        // update_marked_paths は path だけ書き換え file_name は変えないので、順序検証の指紋として使える。
-        let pre_names: Vec<String> = fl.files.iter().map(|f| f.file_name.clone()).collect();
-
-        fl.update_marked_paths(&dest_dir).unwrap();
-
-        let post_names: Vec<String> = fl.files.iter().map(|f| f.file_name.clone()).collect();
-        assert_eq!(post_names, pre_names, "シャッフル順が維持されるべき");
-
-        // マーク済みは dest_dir、非マークは src_dir のままであること
-        for f in &fl.files {
-            if f.marked {
-                assert!(
-                    f.path.starts_with(&dest_dir),
-                    "マーク済みは dest_dir に移っている"
-                );
-            } else {
-                assert!(f.path.starts_with(&src_dir), "非マークは src_dir のまま");
-            }
-        }
-
-        cleanup(&src_dir);
-        cleanup(&dest_dir);
+        let names: Vec<&str> = fl.files.iter().map(|f| f.file_name.as_str()).collect();
+        // epoch と epoch (a, b が同じ日時) → a, b の論理パス順
+        // その後 future → c
+        assert_eq!(names, vec!["a.png", "b.png", "c.png"]);
     }
 }

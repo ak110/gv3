@@ -29,6 +29,12 @@
   ことを示し、これは不変条件違反とみなしてプロセスを止めるのが安全。
 - そのため `expect("<lock 名> lock poisoned")` 形式でpanicさせてよい（Rust標準ライブラリも同様の慣例）。
 - メッセージは `"<lock 名> lock poisoned"` 形式で統一する。これによりログでの追跡が容易になる。
+- 上記のlock poison方針はsusie系を含むすべてのモジュールに適用する。
+  `map_err` で `anyhow::Error` 化する旧パターンは禁止し、新規・既存ともに `expect` 形式へ揃える。
+- 配布TOMLが正規ソースとなる種別（キーバインドなど）は、TOML側を唯一のSSOTとし、
+  ソースコード内に同等のハードコードデフォルトを置かない。
+  ビルド時は `include_str!` で取り込み、起動時にパースして反映する。
+  パース失敗を防ぐため、配布TOMLが正しくパースできることを単体テストで保証する。
 
 ### unsafe-reviewer の必須呼び出し
 
@@ -36,6 +42,11 @@
 `subagent_type=unsafe-reviewer`を呼び出し、対象ファイルの絶対パスを与えてレビューを受けること。
 これは`.claude/hooks/post-edit-rust.sh`のstderrリマインダとペアになっている恒久ルールである。
 `unsafe`を1行も触っていない場合でも、編集したファイルに既存の`unsafe`が含まれていれば対象となる。
+
+`SAFETY`コメント粒度: 自明な`unsafe`（OS仕様で安全確定するWin32 APIなど）は省略可。
+生ポインタ操作・所有権遷移・メモリーマップ・COMオブジェクト・Win32構造受け渡し・
+`unsafe impl Send`/`unsafe impl Sync`など、根拠が読み手に自明でない場合は
+必ず`// SAFETY:`コメント明記。判定は`unsafe-reviewer`に委ねる。
 
 ## リリースビルド
 

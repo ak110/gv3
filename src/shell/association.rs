@@ -4,6 +4,8 @@
 //! - HKCU\Software\Classes\gv.ImageFile  → 画像用ProgID
 //! - HKCU\Software\Classes\gv.ArchiveFile → アーカイブ用ProgID
 //! - 各拡張子の OpenWithProgids に上記ProgIDを追加
+//!
+//! gv3.* 旧ProgIDは初回起動時のマイグレーションでクリーンアップされる
 
 use anyhow::{Context as _, Result};
 use windows::Win32::Foundation::ERROR_SUCCESS;
@@ -142,9 +144,9 @@ const IMAGE_PROGID: &str = "gv.ImageFile";
 const ARCHIVE_PROGID: &str = "gv.ArchiveFile";
 const BOOKMARK_PROGID: &str = "gv.Bookmark";
 
-// 旧ProgID(マイグレーション用)
-const OLD_IMAGE_PROGID: &str = "gv.ImageFile";
-const OLD_ARCHIVE_PROGID: &str = "gv.ArchiveFile";
+// 旧ProgID(gv3 → gv リネーム時のマイグレーション用)
+const OLD_IMAGE_PROGID: &str = "gv3.ImageFile";
+const OLD_ARCHIVE_PROGID: &str = "gv3.ArchiveFile";
 const OLD_BOOKMARK_PROGID: &str = "gv3.Bookmark";
 
 /// ブックマーク拡張子
@@ -299,5 +301,38 @@ pub fn unregister() -> Result<()> {
 pub fn notify_shell() {
     unsafe {
         SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, None, None);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 旧ProgID定数が gv3.* となっていることを確認する。
+    /// gv3 → gv リネーム時に gv.* と新ProgIDと同値になる退行が発生したため
+    /// 同種の退行を検出するためのガードテスト。
+    #[test]
+    fn old_progid_constants_use_gv3_prefix() {
+        assert_eq!(OLD_IMAGE_PROGID, "gv3.ImageFile");
+        assert_eq!(OLD_ARCHIVE_PROGID, "gv3.ArchiveFile");
+        assert_eq!(OLD_BOOKMARK_PROGID, "gv3.Bookmark");
+    }
+
+    /// 新ProgIDと旧ProgIDが異なることを確認する。
+    /// 同値だと cleanup_old_progids() が新ProgIDキーを削除してしまう。
+    #[test]
+    fn new_and_old_progids_differ() {
+        assert_ne!(IMAGE_PROGID, OLD_IMAGE_PROGID);
+        assert_ne!(ARCHIVE_PROGID, OLD_ARCHIVE_PROGID);
+        assert_ne!(BOOKMARK_PROGID, OLD_BOOKMARK_PROGID);
+    }
+
+    /// レジストリ未登録環境でも cleanup_old_progids() が成功することを確認する。
+    /// delete_key_tree は ERROR_FILE_NOT_FOUND を許容するため、初回起動環境を想定したテスト。
+    #[test]
+    fn cleanup_old_progids_succeeds_when_keys_absent() {
+        // テスト並列実行時にレジストリ状態を汚染しないよう、削除のみの操作で完結する。
+        // Windows以外では HKEY_CURRENT_USER 操作が動かないので #[cfg(windows)] を維持する。
+        let _ = cleanup_old_progids();
     }
 }

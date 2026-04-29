@@ -177,6 +177,7 @@ impl PrefetchCoordinator {
 
     /// キャッシュ範囲 (forward, backward) を返す (テスト用)
     #[cfg(test)]
+    #[allow(dead_code)]
     pub fn cache_range(&self) -> (usize, usize) {
         (self.cache_forward, self.cache_backward)
     }
