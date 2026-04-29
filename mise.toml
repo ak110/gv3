@@ -83,12 +83,6 @@ run = [
   "uvx pyfltr run",
 ]
 
-[tasks.ci]
-description = "CI向け全チェック (差分検知で失敗)"
-run = [
-  "uvx pyfltr ci",
-]
-
 [tasks.update]
 description = "依存パッケージの更新"
 # `corepack use pnpm@latest` は package.json の `packageManager` フィールドを

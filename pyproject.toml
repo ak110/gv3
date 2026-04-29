@@ -6,23 +6,12 @@ preset = "latest"
 rust = true
 js-runner = "pnpm"
 prettier = true
-# CI 失敗時のアノテーションに乗せるため、jsonl の message 切り詰め上限を緩和する。
-# 既定 2000 文字だと cargo-clippy のコンパイルログが先頭を埋め、肝心の lint 行が
-# 中略マーカーの内側に消えてしまうため、頭/尾の両側にエラー詳細が残るよう拡張する。
-jsonl-message-max-chars = 12000
-jsonl-message-max-lines = 200
 
 extend-exclude = [
     "target",
     "node_modules",
     "dist",
 ]
-
-[tool.typos.files]
-# CI で `pyfltr ci --output-file=pyfltr-output.jsonl` が書き出す JSONL は
-# ULID (Crockford Base32) を含むため、確率的に MYE / MAE などが typos の
-# 誤検出に引っかかる。CI 生成物のみのファイルなので検査対象から除外する。
-extend-exclude = ["pyfltr-output.jsonl"]
 
 [tool.typos.default.extend-identifiers]
 # FilterOperation の別名（use ... as FO;）

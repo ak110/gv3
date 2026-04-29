@@ -20,7 +20,6 @@
 | `mise run clean`  | ビルド成果物の削除                                                  |
 | `mise run update` | 依存パッケージの更新（cargo・pnpm・GitHub Actionsのピン更新）       |
 | `mise run docs`   | ドキュメントのローカルプレビュー（VitePress dev server）            |
-| `mise run ci`     | CI向け全チェック（差分検知で失敗）                                  |
 
 ## 注意点
 
