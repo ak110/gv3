@@ -18,6 +18,12 @@ extend-exclude = [
     "dist",
 ]
 
+[tool.typos.files]
+# CI で `pyfltr ci --output-file=pyfltr-output.jsonl` が書き出す JSONL は
+# ULID (Crockford Base32) を含むため、確率的に MYE / MAE などが typos の
+# 誤検出に引っかかる。CI 生成物のみのファイルなので検査対象から除外する。
+extend-exclude = ["pyfltr-output.jsonl"]
+
 [tool.typos.default.extend-identifiers]
 # FilterOperation の別名（use ... as FO;）
 FO = "FO"
