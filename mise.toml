@@ -10,7 +10,12 @@ uv = "latest"
 # Cargo.toml の `[lints.clippy]` で対象 lint を allow 指定して許容している。
 rust = { version = "1.95.0", components = "rustfmt,clippy" }
 node = "lts"
-pnpm = "latest"
+# pnpm は mise registry 既定 (`aqua:pnpm/pnpm`) だと aqua-registry の Windows
+# アセット命名 (`pnpm-win-x64`) と上流リリース (`pnpm-win32-x64.zip`) の齟齬で
+# pnpm 11.x のインストールが Windows runner で失敗する (2026-04-29 時点で再現)。
+# `npm:pnpm` バックエンドに切り替え、npm registry 経由で取得する。
+# aqua-registry 側のアセット定義が修正されたら本指定を撤去し既定に戻せる。
+"npm:pnpm" = "latest"
 pinact = "latest"
 git-cliff = "latest"
 actionlint = "latest"
