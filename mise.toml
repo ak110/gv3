@@ -10,12 +10,10 @@ uv = "latest"
 # Cargo.toml の `[lints.clippy]` で対象 lint を allow 指定して許容している。
 rust = { version = "1.95.0", components = "rustfmt,clippy" }
 node = "lts"
-# pnpm は mise registry 既定 (`aqua:pnpm/pnpm`) だと aqua-registry の Windows
-# アセット命名 (`pnpm-win-x64`) と上流リリース (`pnpm-win32-x64.zip`) の齟齬で
-# pnpm 11.x のインストールが Windows runner で失敗する (2026-04-29 時点で再現)。
-# `npm:pnpm` バックエンドに切り替え、npm registry 経由で取得する。
-# aqua-registry 側のアセット定義が修正されたら本指定を撤去し既定に戻せる。
-"npm:pnpm" = "latest"
+# pnpm は corepack 経由で `package.json` の `packageManager` フィールドに従って解決する。
+# mise registry 既定 (`aqua:pnpm/pnpm`) は aqua-registry の Windows アセット命名
+# (`pnpm-win-x64`) と上流リリース (`pnpm-win32-x64.zip`) の齟齬で pnpm 11.x の
+# Windows runner インストールが失敗するため、ツール定義からは外す。
 pinact = "latest"
 git-cliff = "latest"
 actionlint = "latest"
@@ -33,14 +31,19 @@ description = "開発環境のセットアップ"
 # rustfmt / clippy の component インストールは mise の `[tools].rust` 側に寄せている。
 # cargo-deny は `[tools]` の aqua バックエンド指定で `mise install` 時に解決されるため、
 # `cargo install cargo-deny` は重複インストールになるので外している。
+# `corepack enable pnpm` は Node.js 同梱の corepack に pnpm のシムを配置させ、
+# `package.json` の `packageManager` で固定したバージョンを以降の pnpm 呼び出しで
+# 使えるようにする。CI/ローカルともに最初の `pnpm install` の前に必要。
 run = [
   "cargo install cargo-edit",
+  "corepack enable pnpm",
   "pnpm install",
   "git config --unset core.hooksPath || true",
   "uvx pre-commit install",
 ]
 run_windows = [
   "cargo install cargo-edit",
+  "corepack enable pnpm",
   "pnpm install",
   "git config --unset core.hooksPath & exit /b 0",
   "uvx pre-commit install",
@@ -53,8 +56,10 @@ description = "CI環境のセットアップ (cargo install をスキップ)"
 # にて再現: ログには "info: downloading 5 components" が出るが、後段で
 # `'cargo-clippy.exe' is not installed for the toolchain` エラーになる)。
 # mise が設定する RUSTUP_TOOLCHAIN を使い rustup から明示的に冪等補強する。
+# corepack については setup タスクのコメント参照。
 run = [
   "rustup component add rustfmt clippy",
+  "corepack enable pnpm",
   "pnpm install",
 ]
 
@@ -89,11 +94,13 @@ description = "依存パッケージの更新"
 # `corepack use pnpm@latest` は package.json の `packageManager` フィールドを
 # 最新 pnpm のバージョン+ハッシュに書き換える。`pnpm update --latest` は依存のみで
 # pnpm 本体のバージョンは更新しないため、両者を組にして依存とランナーを揃える。
+# pnpm 本体の更新を先に行ってから依存を更新することで、新しい pnpm の依存解決規則を
+# 反映した状態でロックファイルを再生成する。
 run = [
   "cargo upgrade --incompatible",
   "cargo update",
-  "pnpm update --latest",
   "corepack use pnpm@latest",
+  "pnpm update --latest",
   "bash -c 'GITHUB_TOKEN=$(gh auth token) pinact run --update --min-age 1'",
 ]
 
