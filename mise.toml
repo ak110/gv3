@@ -15,27 +15,27 @@ pinact = "latest"
 git-cliff = "latest"
 actionlint = "latest"
 typos = "latest"
-# cargo-deny は mise の core registry に存在しないため (2026-04-27 時点で
-# `mise registry cargo-deny` は "tool not found in registry" を返す)、
-# aqua バックエンド経由で EmbarkStudios/cargo-deny を取得する。これにより
-# mise が活性化したシェルの PATH に cargo-deny が乗り、pyfltr の direct ランナー
-# から shutil.which("cargo-deny") で解決できるようになる。CI 側の
-# taiki-e/install-action@cargo-deny も互換のため残してあるが、mise 由来のバイナリで
-# 先に解決される想定。core registry に登録されたら本指定と pyproject.toml の
-# `cargo-deny-runner = "direct"` を撤去し、既定 (mise exec 経由) に戻せる。
+# cargo-deny は mise の core registry に存在しない (2026-04-29 時点で
+# `mise registry cargo-deny` は "tool not found in registry" を返す) ため、
+# aqua バックエンド経由で EmbarkStudios/cargo-deny を取得する。
+# pyfltr は `cargo-deny-version` 既定値 (`"latest"`) のまま mise.toml に当該ツール
+# 記述がある場合、tool spec を省略して `mise exec -- cargo-deny` を組み立てる。
+# core registry へ登録されたら本指定を撤去し既定の mise exec 経由に戻せる。
 "aqua:EmbarkStudios/cargo-deny" = "latest"
 
 [tasks.setup]
 description = "開発環境のセットアップ"
 # rustfmt / clippy の component インストールは mise の `[tools].rust` 側に寄せている。
+# cargo-deny は `[tools]` の aqua バックエンド指定で `mise install` 時に解決されるため、
+# `cargo install cargo-deny` は重複インストールになるので外している。
 run = [
-  "cargo install cargo-edit cargo-deny",
+  "cargo install cargo-edit",
   "pnpm install",
   "git config --unset core.hooksPath || true",
   "uvx pre-commit install",
 ]
 run_windows = [
-  "cargo install cargo-edit cargo-deny",
+  "cargo install cargo-edit",
   "pnpm install",
   "git config --unset core.hooksPath & exit /b 0",
   "uvx pre-commit install",

@@ -11,13 +11,6 @@ prettier = true
 # 中略マーカーの内側に消えてしまうため、頭/尾の両側にエラー詳細が残るよう拡張する。
 jsonl-message-max-chars = 12000
 jsonl-message-max-lines = 200
-# cargo-deny は mise registry に存在しないため `mise exec cargo-deny@latest` だと
-# 解決に失敗する (2026-04-27 時点で `mise registry cargo-deny` は "tool not found
-# in registry" を返す)。ローカルでは mise.toml の aqua バックエンド指定で PATH に
-# 載る cargo-deny を、CI では taiki-e/install-action が PATH に置く cargo-deny を、
-# それぞれ runner=direct で直接呼び出させる。core registry に登録されたら本指定と
-# mise.toml の aqua バックエンド指定を撤去し、既定 (mise exec 経由) に戻せる。
-cargo-deny-runner = "direct"
 
 extend-exclude = [
     "target",
