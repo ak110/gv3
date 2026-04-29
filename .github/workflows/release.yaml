@@ -24,6 +24,9 @@ concurrency:
 jobs:
   release:
     runs-on: windows-latest
+    env:
+      # mise・pinact等がGitHub APIを叩く際のレート制限（403）回避
+      GITHUB_TOKEN: ${{ github.token }}
     steps:
       - name: Verify CI passed
         env:
