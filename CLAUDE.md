@@ -43,10 +43,9 @@
 
 ### unsafe-reviewer の必須呼び出し
 
-`unsafe`ブロックを含む`.rs`ファイルを編集・新規作成した直後は、必ず`Task`ツールで
+`unsafe`ブロックを新規追加・変更した直後は、必ず`Task`ツールで
 `subagent_type=unsafe-reviewer`を呼び出し、対象ファイルの絶対パスを与えてレビューを受けること。
-これは`.claude/hooks/post-edit-rust.sh`のstderrリマインダとペアになっている恒久ルールである。
-`unsafe`を1行も触っていない場合でも、編集したファイルに既存の`unsafe`が含まれていれば対象となる。
+既存の`unsafe`を含むファイルを編集しても、`unsafe`部分そのものに変更がなければ対象外。
 
 `SAFETY`コメント粒度: 自明な`unsafe`（OS仕様で安全確定するWin32 APIなど）は省略可。
 生ポインタ操作・所有権遷移・メモリーマップ・COMオブジェクト・Win32構造受け渡し・
