@@ -6,6 +6,7 @@ use std::sync::{Arc, RwLock};
 use crate::archive::ArchiveManager;
 use crate::document::{Document, DocumentEvent, ZipBuffer};
 use crate::extension_registry::ExtensionRegistry;
+use crate::file_list::SortOrder;
 use crate::image::{DecoderChain, StandardDecoder};
 
 /// テスト用DecoderChainを生成する (StandardDecoderのみ)
@@ -30,7 +31,13 @@ pub fn test_document() -> (Document, crossbeam_channel::Receiver<DocumentEvent>)
     let registry = Arc::new(ExtensionRegistry::new());
     let decoder = test_decoder();
     let archive_manager = test_archive_manager(&registry);
-    let doc = Document::new(sender, decoder, registry, archive_manager);
+    let doc = Document::new(
+        sender,
+        decoder,
+        registry,
+        archive_manager,
+        SortOrder::default(),
+    );
     (doc, receiver)
 }
 

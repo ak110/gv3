@@ -156,7 +156,13 @@ impl AppWindow {
             archive_manager.add_handler(handler);
         }
 
-        let document = Document::new(sender, decoder, Arc::clone(&registry), archive_manager);
+        let document = Document::new(
+            sender,
+            decoder,
+            Arc::clone(&registry),
+            archive_manager,
+            config.list.default_sort,
+        );
 
         let always_on_top = config.window.always_on_top;
         let base_image_size = config.prefetch.base_image_size();

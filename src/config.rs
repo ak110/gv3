@@ -140,8 +140,10 @@ where
         "date" => Ok(SortOrder::Date),
         "natural" => Ok(SortOrder::Natural),
         unknown => {
-            eprintln!("警告: default_sort の値 '{unknown}' は無効。デフォルト (name) を使用する。");
-            Ok(SortOrder::Name)
+            eprintln!(
+                "警告: default_sort の値 '{unknown}' は無効。デフォルト (natural) を使用する。"
+            );
+            Ok(SortOrder::default())
         }
     }
 }
@@ -260,7 +262,7 @@ mod tests {
         assert_eq!(config.display.alpha_background, AlphaBackground::Checker);
         assert_eq!(config.prefetch.cache_base_width, 1024);
         assert_eq!(config.prefetch.cache_base_height, 1536);
-        assert_eq!(config.list.default_sort, SortOrder::Name);
+        assert_eq!(config.list.default_sort, SortOrder::Natural);
         assert!(!config.window.remember_position);
         assert!(!config.window.remember_size);
         assert!(!config.window.always_on_top);
@@ -316,7 +318,7 @@ auto_scale = "original"
         assert_eq!(config.display.auto_scale, DisplayModeConfig::Original);
         // 未指定フィールドはデフォルト
         assert_eq!(config.display.margin, 64.0);
-        assert_eq!(config.list.default_sort, SortOrder::Name);
+        assert_eq!(config.list.default_sort, SortOrder::Natural);
     }
 
     #[test]
@@ -355,7 +357,7 @@ default_sort = "bogus"
         let config: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(config.display.auto_scale, DisplayModeConfig::Fit);
         assert_eq!(config.display.alpha_background, AlphaBackground::Checker);
-        assert_eq!(config.list.default_sort, SortOrder::Name);
+        assert_eq!(config.list.default_sort, SortOrder::Natural);
     }
 
     #[test]
@@ -457,7 +459,7 @@ alpha_background = "red"
 default_sort = "random"
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.list.default_sort, SortOrder::Name);
+        assert_eq!(config.list.default_sort, SortOrder::Natural);
     }
 
     #[test]

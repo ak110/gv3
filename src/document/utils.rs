@@ -3,13 +3,14 @@
 
 use std::path::Path;
 
-/// パス列をファイル名の自然順 (大小文字無視) で並べ替える。
+/// パス列をファイル名の自然順 (Windows エクスプローラー互換) で並べ替える。
 /// D&D や CLI 引数の選択順を、ユーザー期待のエクスプローラー表示順へ寄せるために使う。
 pub(super) fn sort_paths_natural(paths: &mut [std::path::PathBuf]) {
+    use crate::file_list::compare_paths_natural;
     paths.sort_by(|a, b| {
         let ak = a.file_name().and_then(|s| s.to_str()).unwrap_or("");
         let bk = b.file_name().and_then(|s| s.to_str()).unwrap_or("");
-        natord::compare_ignore_case(ak, bk)
+        compare_paths_natural(ak, bk)
     });
 }
 

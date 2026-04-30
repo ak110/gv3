@@ -24,7 +24,7 @@ use crate::archive::ArchiveManager;
 use crate::editing::EditingSession;
 use crate::extension_registry::ExtensionRegistry;
 use crate::file_info::FileSource;
-use crate::file_list::{FileList, NavigationDirection};
+use crate::file_list::{FileList, NavigationDirection, SortOrder};
 use crate::image::{DecodedImage, DecoderChain};
 use crate::persistent_filter::PersistentFilter;
 use crate::prefetch::{PrefetchCoordinator, PrefetchEngine, PrefetchEvent};
@@ -78,12 +78,15 @@ impl Document {
         decoder: Arc<DecoderChain>,
         registry: Arc<ExtensionRegistry>,
         archive_manager: ArchiveManager,
+        default_sort: SortOrder,
     ) -> Self {
+        let mut file_list = FileList::new(registry);
+        file_list.set_sort_order(default_sort);
         Self {
             event_sender,
             decoder,
             current_image: None,
-            file_list: FileList::new(registry),
+            file_list,
             prefetch_coord: PrefetchCoordinator::new(),
             archive_manager: Arc::new(archive_manager),
             archive_temp_dirs: Vec::new(),
@@ -1525,6 +1528,22 @@ mod tests {
         assert!(doc.current_path().is_none());
         assert_eq!(doc.file_list().len(), 0);
         assert_eq!(doc.file_list().current_index(), None);
+    }
+
+    #[test]
+    fn new_propagates_default_sort_to_file_list() {
+        // `Document::new` が受け取った既定ソート種別がファイル一覧へ伝達されることを確認する。
+        // `test_document` は `SortOrder::default()` (= `Natural`) を渡す。
+        let (doc, _rx) = test_document();
+        assert_eq!(doc.file_list().sort_order(), SortOrder::default());
+
+        // 明示的に異なる種別を渡したケースも検証する。
+        let (sender, _rx2) = crossbeam_channel::unbounded();
+        let registry = Arc::new(ExtensionRegistry::new());
+        let decoder = crate::test_helpers::test_decoder();
+        let archive_manager = crate::test_helpers::test_archive_manager(&registry);
+        let doc2 = Document::new(sender, decoder, registry, archive_manager, SortOrder::Date);
+        assert_eq!(doc2.file_list().sort_order(), SortOrder::Date);
     }
 
     #[test]

@@ -1,13 +1,13 @@
 //! ソート順と比較ロジック。
 
 use crate::file_info::FileInfo;
+use crate::file_list::natural_sort_explorer::compare_explorer;
 
 /// ソート順
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SortOrder {
     /// ファイル名順
-    #[default]
     Name,
     /// ファイル名順 (大文字小文字区別なし)
     #[serde(rename = "name_nocase")]
@@ -16,7 +16,8 @@ pub enum SortOrder {
     Size,
     /// 最終更新日時順
     Date,
-    /// 自然順ソート (数値認識)
+    /// 自然順ソート (Windows エクスプローラー互換)
+    #[default]
     Natural,
 }
 
@@ -42,7 +43,7 @@ impl SortOrder {
                 .modified
                 .cmp(&b.modified)
                 .then_with(|| path_a.cmp(&path_b)),
-            SortOrder::Natural => natord::compare_ignore_case(&path_a, &path_b),
+            SortOrder::Natural => compare_explorer(&path_a, &path_b),
         }
     }
 }

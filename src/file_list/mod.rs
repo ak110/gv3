@@ -14,6 +14,7 @@ use crate::file_info::{FileInfo, FileSource};
 // 責務別の各モジュール
 mod groups;
 mod natural_sort;
+mod natural_sort_explorer;
 pub mod navigation;
 mod sort;
 
@@ -23,6 +24,13 @@ pub use sort::SortOrder;
 
 use groups::{compute_group_layout, group_key};
 use natural_sort::SimpleRng;
+
+/// Windows エクスプローラー互換の自然順比較を外部に公開するヘルパー。
+///
+/// パス列の整列など、`SortOrder::compare` を介さない箇所からも同じ比較規則を使えるようにする。
+pub fn compare_paths_natural(a: &str, b: &str) -> std::cmp::Ordering {
+    natural_sort_explorer::compare_explorer(a, b)
+}
 
 /// ファイル一覧管理
 pub struct FileList {
@@ -37,8 +45,20 @@ impl FileList {
         Self {
             files: Vec::new(),
             current_index: None,
-            sort_order: SortOrder::Natural,
+            sort_order: SortOrder::default(),
             registry,
+        }
+    }
+
+    /// 既定ソート種別を後設定する。
+    ///
+    /// `FileList::new` 構築直後に配布 TOML 由来の値を反映するための小さなセッター。
+    /// 既存ファイルがあればその場で再ソートし、空であれば `sort_order` のみ更新する。
+    pub fn set_sort_order(&mut self, order: SortOrder) {
+        if self.files.is_empty() {
+            self.sort_order = order;
+        } else {
+            self.sort(order);
         }
     }
 
@@ -730,6 +750,24 @@ mod tests {
         cleanup(&dir);
     }
 
+    /// 先頭ゼロ付き数値混在 (`018, 19, 020`) でもエクスプローラーと同じ並びになることを確認する。
+    /// 旧 `natord` 実装は先頭ゼロを左揃えで比較するため `018, 020, 19` 順となり、
+    /// ユーザー期待 (`019` と `020` の間に `19` が来る並び) と乖離していた。
+    /// `StrCmpLogicalW` ベースの自然順比較に切り替わると `018, 19, 020` 順となる。
+    #[test]
+    fn natural_sort_leading_zero_explorer_order() {
+        let dir = std::env::temp_dir().join("gv_test_fl_natural_leadzero");
+        create_test_files(&dir, &["018.jpg", "19.jpg", "020.jpg"]);
+
+        let mut fl = FileList::new(test_registry());
+        fl.populate_from_folder(&dir).unwrap();
+        fl.sort(SortOrder::Natural);
+
+        let names: Vec<&str> = fl.files.iter().map(|f| f.file_name.as_str()).collect();
+        assert_eq!(names, vec!["018.jpg", "19.jpg", "020.jpg"]);
+        cleanup(&dir);
+    }
+
     #[test]
     fn navigate_relative_wraps_around() {
         let dir = std::env::temp_dir().join("gv_test_fl_nav");
@@ -1021,6 +1059,55 @@ mod tests {
                 on_demand: false,
             },
         }
+    }
+
+    #[test]
+    fn sort_natural_orders_archive_entries_with_leading_zero() {
+        // アーカイブ内エントリでも `Natural` の Windows エクスプローラー互換並びが効くことを確認する。
+        let registry = test_registry();
+        let mut fl = FileList::new(registry);
+
+        fl.push(make_archive_file_info("a.zip", "020.jpg", "020.jpg"));
+        fl.push(make_archive_file_info("a.zip", "19.jpg", "19.jpg"));
+        fl.push(make_archive_file_info("a.zip", "018.jpg", "018.jpg"));
+
+        fl.sort(SortOrder::Natural);
+
+        let paths: Vec<String> = fl.files.iter().map(|f| f.source.display_path()).collect();
+        assert_eq!(
+            paths,
+            vec![
+                "a.zip/018.jpg".to_string(),
+                "a.zip/19.jpg".to_string(),
+                "a.zip/020.jpg".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn set_sort_order_reflects_when_files_present() {
+        // 構築直後の `set_sort_order` で `sort_order` が後設定され、既存ファイルがあれば再ソートされる。
+        let registry = test_registry();
+        let mut fl = FileList::new(registry);
+        // 既定 (Natural) の状態で詰める
+        fl.push(make_archive_file_info("a.zip", "b.png", "b.png"));
+        fl.push(make_archive_file_info("a.zip", "a.png", "a.png"));
+
+        // Name 順へ後設定すると論理パス昇順で並び替わる
+        fl.set_sort_order(SortOrder::Name);
+        assert_eq!(fl.sort_order(), SortOrder::Name);
+        let names: Vec<&str> = fl.files.iter().map(|f| f.file_name.as_str()).collect();
+        assert_eq!(names, vec!["a.png", "b.png"]);
+    }
+
+    #[test]
+    fn set_sort_order_on_empty_list_only_updates_order() {
+        let registry = test_registry();
+        let mut fl = FileList::new(registry);
+        assert_eq!(fl.sort_order(), SortOrder::Natural); // 既定は Natural
+        fl.set_sort_order(SortOrder::Date);
+        assert_eq!(fl.sort_order(), SortOrder::Date);
+        assert!(fl.files.is_empty());
     }
 
     #[test]

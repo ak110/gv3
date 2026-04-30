@@ -18,8 +18,13 @@ cache_base_width = 1024
 cache_base_height = 1536
 
 [list]
-# デフォルトソート: "name", "name_nocase", "size", "date", "natural"
-default_sort = "name"
+# デフォルトソート:
+#   "name"        ファイル名順 (大文字小文字区別あり)
+#   "name_nocase" ファイル名順 (大文字小文字区別なし)
+#   "size"        ファイルサイズ順
+#   "date"        最終更新日時順
+#   "natural"     自然順 (Windows エクスプローラー互換)
+default_sort = "natural"
 
 [window]
 # ウィンドウ位置の記憶
