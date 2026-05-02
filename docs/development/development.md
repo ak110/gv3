@@ -1,11 +1,13 @@
 # 開発ガイド
 
-## 必要環境
+## 開発環境の構築手順
+
+### 必要環境
 
 - [mise](https://mise.jdx.dev/)（タスクランナー・ツールバージョン管理）
 - Visual Studio Build Tools（C++ ビルドツール）
 
-## 初回セットアップ
+### 初回セットアップ
 
 ```cmd
 mise install && mise run setup
@@ -14,7 +16,7 @@ mise install && mise run setup
 `cargo`や`node`、`pnpm`などのコマンドはシステムにインストールされたものではなく、必ずmise経由で実行すること。
 具体的には`mise run`タスク経由、またはmiseが管理するPATH上のバイナリを使用する。
 
-## miseタスク
+## 開発コマンド
 
 普段使うのはこの2つ。
 
@@ -35,7 +37,7 @@ mise install && mise run setup
 | `mise run update` | 依存パッケージの更新             |
 | `mise run docs`   | ドキュメントのローカルプレビュー |
 
-## ドキュメントサイト
+## ドキュメントサイト運用
 
 ドキュメントは [VitePress](https://vitepress.dev/) で構築し、GitHub Pagesでホストしている。
 
