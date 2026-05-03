@@ -1,9 +1,12 @@
 # ぐらびゅ
 
-[![CI](https://github.com/ak110/gv/actions/workflows/ci.yaml/badge.svg)](https://github.com/ak110/gv/actions/workflows/ci.yaml)
-[![Release](https://github.com/ak110/gv/actions/workflows/release.yaml/badge.svg)][release-workflow]
+[![CI][ci-badge]][ci-url]
+[![Release][release-badge]][release-url]
 
-[release-workflow]: https://github.com/ak110/gv/actions/workflows/release.yaml
+[ci-badge]: https://github.com/ak110/gv/actions/workflows/ci.yaml/badge.svg
+[ci-url]: https://github.com/ak110/gv/actions/workflows/ci.yaml
+[release-badge]: https://github.com/ak110/gv/actions/workflows/release.yaml/badge.svg
+[release-url]: https://github.com/ak110/gv/actions/workflows/release.yaml
 
 Windows用画像ビューアー。
 

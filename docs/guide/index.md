@@ -1,4 +1,4 @@
-# ユーザーガイド
+# 利用者向けガイド
 
 - [はじめに](./getting-started.md)
 - [画像の表示](./viewing.md)
