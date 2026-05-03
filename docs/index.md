@@ -11,10 +11,10 @@ hero:
       text: ダウンロード
       link: https://github.com/ak110/gv/releases
 features:
-  - title: 高速な画像切り替え
+  - title: 前後画像の先読みによる高速切り替え
     details: 先読みエンジンにより、前後の画像をバックグラウンドでデコード・キャッシュ
-  - title: 豊富なフォーマット対応
-    details: JPEG, PNG, GIF, BMP, WebP, PDF, ZIP/cbz, RAR/cbr, 7z, 64bit Susieプラグイン
-  - title: カスタマイズ可能
+  - title: 多形式対応
+    details: JPEG / PNG / GIF / BMP / WebP / PDF / ZIP / cbz / RAR / cbr / 7z / 64bit Susieプラグイン
+  - title: 設定ファイルとキーバインドによるカスタマイズ
     details: 設定ファイルとキーバインド設定で自由にカスタマイズ
 ---

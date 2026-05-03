@@ -25,7 +25,7 @@ jobs:
   release:
     runs-on: windows-latest
     env:
-      # mise・pinact等がGitHub APIを叩く際のレート制限（403）回避
+      # mise・pinact等がGitHub APIを呼び出す際のレート制限（403）回避。
       GITHUB_TOKEN: ${{ github.token }}
     steps:
       - name: Verify CI passed
@@ -37,7 +37,7 @@ jobs:
           $intervalSec = 20
           for ($i = 1; $i -le $maxAttempts; $i++) {
             $conclusion = gh api repos/${{ github.repository }}/commits/${{ github.sha }}/check-suites `
-              --jq '.check_suites[] | select(.app.slug == "github-actions") | .conclusion' `
+              --jq='.check_suites[] | select(.app.slug == "github-actions") | .conclusion' `
               | Select-Object -First 1
             if ($conclusion -eq "success") {
               Write-Host "CI passed."
@@ -64,7 +64,7 @@ jobs:
         id: existing
         shell: pwsh
         run: |
-          $tag = git tag --points-at HEAD | Where-Object { $_ -match '^v\d+\.' } | Select-Object -First 1
+          $tag = git tag --points-at=HEAD | Where-Object { $_ -match '^v\d+\.' } | Select-Object -First 1
           if ($tag) {
             Write-Host "Found existing tag $tag on HEAD, reusing"
             "version=$($tag.TrimStart('v'))" >> $env:GITHUB_OUTPUT
@@ -155,7 +155,7 @@ jobs:
           git push origin HEAD --tags
 
       - name: Generate release notes
-        run: git cliff --latest --strip header --output CHANGES.md
+        run: git cliff --latest --strip=header --output=CHANGES.md
 
       - name: Append changelog link
         shell: pwsh
@@ -185,7 +185,7 @@ jobs:
           if ($LASTEXITCODE -eq 0) {
             Write-Host "Release $tag already exists, skipping"
           } else {
-            gh release create $tag $asset --title $tag --notes-file CHANGES.md
+            gh release create $tag $asset --title=$tag --notes-file=CHANGES.md
           }
 
       - name: Trigger docs deployment

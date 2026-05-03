@@ -37,11 +37,24 @@ mise install && mise run setup
 | `mise run update` | 依存パッケージの更新             |
 | `mise run docs`   | ドキュメントのローカルプレビュー |
 
+`mise run test`はcargo-clippy・cargo-test・cargo-deny・markdownlint・textlint等を一括実行する。
+Linux環境ではlint系（textlint / markdownlint / prettier）のみ確認可能。
+cargo-clippy / cargo-test / cargo-denyはWindowsターゲットのためLinuxでは失敗する。
+
+## サプライチェーン攻撃対策
+
+`cargo-deny`（`deny.toml`設定）でライセンスチェックと脆弱性アドバイザリチェックを実施している。
+`mise run test`に組み込まれているため、コミット前に自動実行される。
+
+また、GitHub Actionsのワークフローは`pinact`でハッシュピン留めして実行している
+（`mise run update`でハッシュピン更新が可能）。
+`taiki-e/install-action@cargo-deny`はツール名タグ形式のためpinactでハッシュピン不可（`.pinact.yaml`で除外済み）。
+
 ## ドキュメントサイト運用
 
-ドキュメントは [VitePress](https://vitepress.dev/) で構築し、GitHub Pagesでホストしている。
+ドキュメントは [VitePress](https://vitepress.dev/) で構築し、GitHub Pagesでホストしている
+（URL: <https://ak110.github.io/gv/>）。
 
-- URL: <https://ak110.github.io/gv/>
 - ローカルプレビュー: `mise run docs`
 - 自動デプロイ: masterブランチへのpush時に`Docs`ワークフローが自動実行される（`docs/`以下または`package.json`の変更時のみ）
 
@@ -51,12 +64,12 @@ GitHub Actionsの`Release`ワークフローを手動実行してリリースす
 
 ```cmd
 rem リリース実行 (いずれか1つ)
-gh workflow run release.yaml --field "bump=PATCH"
-gh workflow run release.yaml --field "bump=MINOR"
-gh workflow run release.yaml --field "bump=MAJOR"
+gh workflow run release.yaml --field="bump=PATCH"
+gh workflow run release.yaml --field="bump=MINOR"
+gh workflow run release.yaml --field="bump=MAJOR"
 
 rem ワークフロー完了を待ち、バージョンバンプコミットを取り込む
-for /f "usebackq" %i in (`gh run list --workflow=release.yaml -L1 --json databaseId -q ".[0].databaseId"`) do gh run watch %i && git pull
+for /f "usebackq" %i in (`gh run list --workflow=release.yaml -L1 --json=databaseId -q ".[0].databaseId"`) do gh run watch %i && git pull
 ```
 
 結果の確認: <https://github.com/ak110/gv/actions>
