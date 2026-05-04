@@ -32,7 +32,7 @@ Windowsバッチファイル生成の規約（CP932・UTF-8 BOM・chcp・goto構
 ## サブエージェント・スキル連携
 
 `unsafe`ブロックを新規追加・変更した直後は、必ず`Task`ツールで
-`subagent_type=unsafe-reviewer`を呼び出し、対象ファイルの絶対パスを与えてレビューを受けること。
+`subagent_type=unsafe-reviewer`を呼び出し、対象ファイルの絶対パスを与えてレビューを依頼すること。
 既存の`unsafe`を含むファイルを編集しても、`unsafe`部分そのものに変更がなければ対象外。
 
 SAFETYコメントの粒度判定基準は[.claude/agents/unsafe-reviewer.md](.claude/agents/unsafe-reviewer.md)を唯一のSSOTとする。

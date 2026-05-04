@@ -2,9 +2,9 @@
 uv = "latest"
 # Windows CI で `rustup component add` が異なるツールチェーンに当たり cargo-clippy が
 # 見つからない事象が出ていたため、mise の rust プラグイン経由で components を一緒に
-# インストールする (mise が解決した実体ツールチェーン上に確実に component を入れる)。
+# インストールする (mise が解決した実体ツールチェーン上に確実に component を導入する)。
 # パッチバージョンまで明示するのは mise の partial version 解決ミスでローカルと CI の
-# Rust が食い違うのを防ぐため。MSRV (Cargo.toml `rust-version`) と整合し、
+# Rust が不一致になるのを防ぐため。MSRV (Cargo.toml `rust-version`) と整合し、
 # rust-toolchain.toml も同じ系列を指定する。
 # 1.95 系で `collapsible_match` / `while_let_loop` の clippy 動作変更が入ったが、
 # Cargo.toml の `[lints.clippy]` で対象 lint を allow 指定して許容している。
@@ -28,7 +28,7 @@ typos = "latest"
 
 [tasks.setup]
 description = "開発環境のセットアップ"
-# rustfmt / clippy の component インストールは mise の `[tools].rust` 側に寄せている。
+# rustfmt / clippy の component インストールは mise の `[tools].rust` 側に集約している。
 # cargo-deny は `[tools]` の aqua バックエンド指定で `mise install` 時に解決されるため、
 # `cargo install cargo-deny` は重複インストールになるので外している。
 # `corepack enable pnpm` は Node.js 同梱の corepack に pnpm のシムを配置させ、

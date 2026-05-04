@@ -1,7 +1,7 @@
 [toolchain]
 # プロジェクト全体で 1.95 系列を採用する。MSRV (Cargo.toml `rust-version`) と一致。
 # 具体的なパッチまで指定するのは mise.toml と揃え、mise の partial version 解決ミスで
-# ローカルと CI の Rust が食い違うのを防ぐため。
+# ローカルと CI の Rust が不一致になるのを防ぐため。
 # 1.95 系で `collapsible_match` / `while_let_loop` の clippy 動作変更が入ったが、
 # Cargo.toml の `[lints.clippy]` で対象 lint を allow 指定して許容している。
 channel = "1.95.0"
