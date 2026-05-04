@@ -11,7 +11,7 @@ Windows用画像ビューアー（Rust製）。多形式対応と高速切り替
 - リリースは`gh workflow run release.yaml --field="bump=PATCH"`で実行する
 - コミット前の検証方法: `uvx pyfltr run-for-agent`
   - ドキュメントなどのみの変更の場合は省略可（pre-commitで実行されるため）
-  - 修正後の再実行時は、対象ファイルや対象ツールを必要に応じて絞って実行する（最終検証はCIに委ねる前提）
+  - 修正後の再実行時は、対象ファイルや対象ツールを必要に応じて限定して実行する（最終検証はCIに委ねる前提）
     - 例: `uvx pyfltr run-for-agent --commands=cargo-clippy,cargo-test path/to/file`
 - 作業完了時、コミットと並行してバックグラウンドでリリースビルド（`mise run build`）も実行する。
   完了は待たなくてよい（ユーザーによる動作確認をスムーズにするため）

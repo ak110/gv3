@@ -23,7 +23,7 @@ typos = "latest"
 # aqua バックエンド経由で EmbarkStudios/cargo-deny を取得する。
 # pyfltr は `cargo-deny-version` 既定値 (`"latest"`) のまま mise.toml に当該ツール
 # 記述がある場合、tool spec を省略して `mise exec -- cargo-deny` を組み立てる。
-# core registry へ登録されたら本指定を撤去し既定の mise exec 経由に戻せる。
+# core registry へ登録されたら本指定を撤去し既定の mise exec 経由に戻すことができる。
 "aqua:EmbarkStudios/cargo-deny" = "latest"
 
 [tasks.setup]
@@ -33,7 +33,7 @@ description = "開発環境のセットアップ"
 # `cargo install cargo-deny` は重複インストールになるので外している。
 # `corepack enable pnpm` は Node.js 同梱の corepack に pnpm のシムを配置させ、
 # `package.json` の `packageManager` で固定したバージョンを以降の pnpm 呼び出しで
-# 使えるようにする。CI/ローカルともに最初の `pnpm install` の前に必要。
+# 利用可能にする。CI/ローカルともに最初の `pnpm install` の前に必要。
 run = [
   "cargo install cargo-edit",
   "corepack enable pnpm",
