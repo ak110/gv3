@@ -279,7 +279,7 @@ del "%~f0" & exit
         extra_copy_commands = extra_copy_commands,
     );
 
-    // CRLFに変換してUTF-8 BOM付きで書き出す
+    // CRLFに変換してUTF-8 BOM付きで保存する
     let content = content.replace('\n', "\r\n");
     let mut encoded = Vec::with_capacity(3 + content.len());
     encoded.extend_from_slice(b"\xEF\xBB\xBF"); // UTF-8 BOM

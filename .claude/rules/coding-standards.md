@@ -8,7 +8,7 @@
 
 - `expect("<lock 名> lock poisoned")`形式でpanicさせる（Rust標準ライブラリも同様の慣例）
 - メッセージは`"<lock 名> lock poisoned"`形式で統一する。
-  これによりログでの追跡が容易になる
+  ログでの追跡が容易になる
 - 上記方針はsusie系を含むすべてのモジュールに適用する。
   `map_err`で`anyhow::Error`化する旧パターンは禁止し、新規・既存ともに`expect`形式へ揃える
 

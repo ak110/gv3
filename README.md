@@ -18,12 +18,12 @@ Windows用画像ビューアー。
 
 ## インストール
 
-[Releases](https://github.com/ak110/gv/releases) からZIPをダウンロードし、任意のフォルダに展開する。
+[Releases](https://github.com/ak110/gv/releases)からZIPをダウンロードし、任意のフォルダに展開。
 
 ## 設定
 
-`ぐらびゅ.default.toml` をコピーして `ぐらびゅ.toml` にリネームし、設定をカスタマイズできる。
-キーバインドは `ぐらびゅ.keys.default.toml` をコピーして `ぐらびゅ.keys.toml` にリネームして編集する。
+`ぐらびゅ.default.toml`をコピーして`ぐらびゅ.toml`にリネームすることで設定をカスタマイズできる。
+キーバインドは`ぐらびゅ.keys.default.toml`をコピーして`ぐらびゅ.keys.toml`にリネームして編集。
 
 ## ドキュメント
 

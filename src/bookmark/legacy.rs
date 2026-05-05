@@ -389,7 +389,7 @@ mod tests {
 
     #[test]
     fn parse_odd_byte_count() {
-        // 奇数バイト: 末尾 1 バイトは切り捨てられるがパニックしない
+        // 奇数バイト: 末尾 1 バイトは破棄されるがパニックしない
         let mut bytes = to_utf16le("files:\r\na.jpg\r\n");
         bytes.push(0xFF);
         let data = parse_legacy_bookmark_utf16le(&bytes, &test_is_archive);

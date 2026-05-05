@@ -1,10 +1,10 @@
 # コンセプト
 
-Windows用の軽量な画像ビューアーである。
+Windows用画像ビューアーである。
 
 ## 設計方針
 
-### シンプルさの追求
+### 機能の限定
 
 画像の閲覧・ナビゲーション・ファイル操作に機能を限定する。
 
@@ -13,20 +13,20 @@ Windows用の軽量な画像ビューアーである。
 先読み（プリフェッチ）エンジンを中核に据え、前後の画像をバックグラウンドでデコード・キャッシュすることで、
 画像切り替えを瞬時に行う。
 
-### モダンな開発環境
+### 開発環境
 
-`rustup` + テキストエディタ（VSCode推奨）で開発できる。Visual Studioは不要（Build Toolsのみ必要）。
+`rustup`とテキストエディタ（VSCode推奨）で開発できる。Visual Studio本体は不要でBuild Toolsのみ必要。
 
 ## 技術選定
 
 ### 言語: Rust
 
-- C++同等のパフォーマンス。先読みバッファの精密なメモリ管理に所有権システムが最適
-- `rustup` 一発で環境構築
-- コンパイル時にデータ競合を検出。先読みスレッドの安全な実装
-- `libloading` + `extern "system"` で64bit Susieプラグインの動的ロードが可能
+- C++同等のパフォーマンス。所有権システムにより先読みバッファのメモリ管理を安全に実装できる
+- `rustup`で環境を構築できる
+- コンパイル時にデータ競合を検出。先読みスレッドを安全に実装できる
+- `libloading` + `extern "system"`で64bit Susieプラグインの動的ロードが可能
 
 ### GUI: windows-rs (Win32 API) + Direct2D
 
-- windows-rs: Microsoft公式のRust用Win32バインディング。型安全にWin32 API、COM、Direct2Dを呼び出せる
-- Direct2D: GPU加速による高速な画像描画
+- windows-rs: Microsoft公式のRust用Win32バインディング。型安全にWin32 API・COM・Direct2Dを呼び出すことができる
+- Direct2D: GPU加速による画像描画

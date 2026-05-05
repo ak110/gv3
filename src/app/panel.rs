@@ -28,7 +28,7 @@ impl AppWindow {
         self.document.process_expand_results();
 
         // FileListChanged は同一poll内で複数届きうる (バックグラウンド統合バッチごと等)。
-        // パネル更新コストを抑えるため、ループ中はフラグだけ立て、ループ抜け後に1回だけ
+        // パネル更新コストを抑えるため、ループ中はフラグだけ設定し、ループ抜け後に1回だけ
         // panel.update() を呼ぶ。
         let mut file_list_changed = false;
         let mut nav_changed_index: Option<usize> = None;
@@ -201,7 +201,7 @@ impl AppWindow {
             i if i == LVN_ITEMCHANGED => {
                 // SAFETY: LVN_ITEMCHANGED の lparam は OS が有効な NMLISTVIEW へのポインタを保証する
                 let nmlv = unsafe { &*(lparam.0 as *const NMLISTVIEW) };
-                // 状態変化のうち SELECTED ビットが新たに立ったときだけ反応
+                // 状態変化のうち SELECTED ビットが新たに有効になったときだけ反応
                 let became_selected = (nmlv.uChanged.0 & LVIF_STATE.0) != 0
                     && (nmlv.uOldState & LVIS_SELECTED.0) == 0
                     && (nmlv.uNewState & LVIS_SELECTED.0) != 0;

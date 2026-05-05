@@ -27,7 +27,7 @@ use natural_sort::SimpleRng;
 
 /// Windows エクスプローラー互換の自然順比較を外部に公開するヘルパー。
 ///
-/// パス列の整列など、`SortOrder::compare` を介さない箇所からも同じ比較規則を使えるようにする。
+/// パス列の整列など、`SortOrder::compare` を介さない箇所からも同じ比較規則を利用できるようにする。
 pub fn compare_paths_natural(a: &str, b: &str) -> std::cmp::Ordering {
     natural_sort_explorer::compare_explorer(a, b)
 }
@@ -752,7 +752,7 @@ mod tests {
 
     /// 先頭ゼロ付き数値混在 (`018, 19, 020`) でもエクスプローラーと同じ並びになることを確認する。
     /// 旧 `natord` 実装は先頭ゼロを左揃えで比較するため `018, 020, 19` 順となり、
-    /// ユーザー期待 (`019` と `020` の間に `19` が来る並び) と乖離していた。
+    /// ユーザー期待 (`019` と `020` の間に `19` が位置する並び) と乖離していた。
     /// `StrCmpLogicalW` ベースの自然順比較に切り替わると `018, 19, 020` 順となる。
     #[test]
     fn natural_sort_leading_zero_explorer_order() {
@@ -1063,7 +1063,7 @@ mod tests {
 
     #[test]
     fn sort_natural_orders_archive_entries_with_leading_zero() {
-        // アーカイブ内エントリでも `Natural` の Windows エクスプローラー互換並びが効くことを確認する。
+        // アーカイブ内エントリでも `Natural` の Windows エクスプローラー互換並びが機能することを確認する。
         let registry = test_registry();
         let mut fl = FileList::new(registry);
 
@@ -1089,7 +1089,7 @@ mod tests {
         // 構築直後の `set_sort_order` で `sort_order` が後設定され、既存ファイルがあれば再ソートされる。
         let registry = test_registry();
         let mut fl = FileList::new(registry);
-        // 既定 (Natural) の状態で詰める
+        // 既定 (Natural) の状態で追加する
         fl.push(make_archive_file_info("a.zip", "b.png", "b.png"));
         fl.push(make_archive_file_info("a.zip", "a.png", "a.png"));
 
@@ -1301,7 +1301,7 @@ mod tests {
 
     #[test]
     fn navigate_prev_folder_from_middle_of_group() {
-        // グループ内の途中から前のフォルダに移動すると、前グループの先頭に行く
+        // グループ内の途中から前のフォルダに移動すると、前グループの先頭に移動する
         let registry = test_registry();
         let mut fl = FileList::new(registry);
 
@@ -1455,8 +1455,8 @@ mod tests {
         assert_eq!(fl.current_index(), Some(4));
     }
 
-    /// テスト用に任意の `FileSource` から `FileInfo` を作るヘルパー。
-    /// 論理パス順を確認したいテスト用なので、`path` (実ファイルパス) は適当な代表値を入れる。
+    /// テスト用に任意の `FileSource` から `FileInfo` を生成するヘルパー。
+    /// 論理パス順を確認したいテスト用なので、`path` (実ファイルパス) は適当な代表値を指定する。
     fn make_file_info_with_source(
         source: FileSource,
         size: u64,

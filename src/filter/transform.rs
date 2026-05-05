@@ -215,7 +215,7 @@ pub fn rotate_arbitrary(image: &DecodedImage, degrees: f64) -> DecodedImage {
 /// 解像度変更 (Lanczos3リサイズ、SIMD加速)
 ///
 /// 入力サイズが極端な場合 (ゼロや fast_image_resize が受け付けないサイズ) は
-/// `Err` を返す。呼び出し側で `show_error_title` 等に流すこと。
+/// `Err` を返す。呼び出し側で `show_error_title` 等へ渡すこと。
 pub fn resize(image: &DecodedImage, new_width: u32, new_height: u32) -> Result<DecodedImage> {
     if new_width == 0 || new_height == 0 {
         return Ok(DecodedImage {

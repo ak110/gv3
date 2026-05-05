@@ -48,14 +48,14 @@ mod tests {
 
     #[test]
     fn leading_zero_user_scenario() {
-        // ユーザー提示シナリオ: 19 が 100 の方に飛ばず、018 と 020 の間に来る
+        // ユーザー提示シナリオ: 19 が 100 の方へ移動せず、018 と 020 の間に位置する
         let result = sorted(&["018.jpg", "19.jpg", "020.jpg"]);
         assert_eq!(result, vec!["018.jpg", "19.jpg", "020.jpg"]);
     }
 
     #[test]
     fn leading_zero_with_three_digit_neighbor() {
-        // 旧 natord では 19 が 100 の手前に来るが、エクスプローラーでは 100 より前に来る
+        // 旧 natord では 19 が 100 の手前に位置するが、エクスプローラーでは 100 より前に位置する
         let result = sorted(&["019.jpg", "020.jpg", "099.jpg", "19.jpg", "100.jpg"]);
         assert_eq!(
             result,

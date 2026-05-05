@@ -582,7 +582,7 @@ impl D2DRenderer {
                 );
             }
 
-            // 白線 (内側、破線風に見える)
+            // 白線 (内側、破線風に表示される)
             if let Ok(white_brush) = self.render_target.CreateSolidColorBrush(
                 &D2D1_COLOR_F {
                     r: 1.0,

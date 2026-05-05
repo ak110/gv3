@@ -879,7 +879,7 @@ zoom_in = "Ctrl+Num +, Ctrl+WheelDown"
             config.lookup(parse_chord("Ctrl+G").unwrap()),
             Some(Action::GrayscaleStrict)
         );
-        // 永続フィルタ (parse_toml がセクションを認識して PFilter* に振る箇所)
+        // 永続フィルタ (parse_toml がセクションを認識して PFilter* に割り当てる箇所)
         assert_eq!(
             config.lookup(parse_chord("Ctrl+Shift+L").unwrap()),
             Some(Action::PFilterLevels)

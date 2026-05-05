@@ -356,7 +356,7 @@ mod tests {
         assert_eq!(result.width, 8);
         assert_eq!(result.height, 8);
         // アンシャープマスクはコントラストを強調する
-        // → チェッカーパターンの差が広がるか、clampで0/255に張り付く
+        // → チェッカーパターンの差が広がるか、clampで0/255に固定される
         let mut min_val = 255u8;
         let mut max_val = 0u8;
         for pixel in result.data.chunks_exact(4) {

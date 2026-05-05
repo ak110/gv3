@@ -30,7 +30,7 @@ impl ZipHandler {
         Ok(Self::list_images_from_archive(archive, registry))
     }
 
-    /// インメモリバッファからエントリを読み出す (Stored最適化付き)
+    /// インメモリバッファからエントリを取得する (Stored最適化付き)
     pub fn read_entry_from_buffer(buffer: &[u8], entry_name: &str) -> Result<Vec<u8>> {
         let cursor = std::io::Cursor::new(buffer);
         let mut archive = zip::ZipArchive::new(cursor).context("ZIPバッファの読み取りに失敗")?;
@@ -151,13 +151,13 @@ impl ArchiveHandler for ZipHandler {
                 continue;
             }
 
-            // ファイルデータを読み出し
+            // ファイルデータを取得
             let mut data = Vec::new();
             if entry.read_to_end(&mut data).is_err() {
                 continue;
             }
 
-            // target_dirに書き出し (重複時はリネーム)
+            // target_dirに保存 (重複時はリネーム)
             let out_path = resolve_filename(target_dir, filename);
             if std::fs::write(&out_path, &data).is_ok() {
                 results.push((out_path, entry_name));
@@ -173,7 +173,7 @@ mod tests {
     use super::*;
     use std::io::Write;
 
-    /// テスト用ZIPをメモリ上で作成してtempに書き出す
+    /// テスト用ZIPをメモリ上で作成してtempに保存する
     fn create_test_zip(path: &Path, entries: &[(&str, &[u8])]) {
         let file = File::create(path).unwrap();
         let mut writer = zip::ZipWriter::new(file);

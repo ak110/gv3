@@ -45,7 +45,7 @@ pub struct Document {
     archive_manager: Arc<ArchiveManager>,
     archive_temp_dirs: Vec<PathBuf>,
     current_containers: Vec<PathBuf>,
-    /// ZIPファイルのバッファキャッシュ (オンデマンド読み出し用、先読みスレッドと共有)
+    /// ZIPファイルのバッファキャッシュ (オンデマンド取得用、先読みスレッドと共有)
     zip_buffers: Arc<RwLock<HashMap<PathBuf, ZipBuffer>>>,
     /// 編集セッション (編集中のみSome)
     editing_session: Option<EditingSession>,
@@ -110,7 +110,7 @@ impl Document {
     /// `base_image_size`: キャッシュ枚数計算の基準となる1枚あたりのバイト数
     ///
     /// ワーカースレッドの起動に失敗した場合は `Err` を返す。呼び出し元で
-    /// `show_error_title` 等に流すこと。失敗してもアプリ自体は起動継続可能。
+    /// `show_error_title` 等へ渡すこと。失敗してもアプリ自体は起動継続可能。
     pub fn start_prefetch(
         &mut self,
         notify: Arc<dyn Fn() + Send + Sync>,
@@ -278,7 +278,7 @@ impl Document {
 
         // トップレベル入力の正規化。リパースポイント (シンボリックリンク・ジャンクション) は
         // `canonicalize()` での実体化前に除外し、再帰走査時の除外規則と一貫させる。
-        // 複数入力が同じ実体パスへ解決された場合は、先着を残して以降を捨てる (重複走査の回避)。
+        // 複数入力が同じ実体パスへ解決された場合は、先着を残して以降を除外する (重複走査の回避)。
         let mut canonical_inputs: Vec<PathBuf> = Vec::new();
         for raw in paths {
             if let Ok(meta) = std::fs::symlink_metadata(raw)
@@ -318,7 +318,7 @@ impl Document {
             if path.is_dir() {
                 // フォルダ: 再帰走査した全ファイルを振り分ける。
                 // 再帰ヘルパー内でリパースポイント除外と自然順整列を済ませており、
-                // 親階層のファイル→サブディレクトリの順に積まれている。
+                // 親階層のファイル→サブディレクトリの順に格納されている。
                 for entry_path in collect_folder_files_recursive(path) {
                     if crate::bookmark::is_bookmark_file(&entry_path) {
                         bookmarks.push(entry_path);
@@ -738,7 +738,7 @@ impl Document {
 
                     // file_list 内で該当 PendingContainer を探して統合
                     let Some(idx) = self.find_pending_index(&container_path) else {
-                        // プレースホルダがもう存在しない (リスト変更等) → 結果を捨てる
+                        // プレースホルダがもう存在しない (リスト変更等) → 結果を破棄する
                         if let ContainerResult::TempExtracted { temp_dir, .. } = &result {
                             let _ = std::fs::remove_dir_all(temp_dir);
                         }
@@ -1085,7 +1085,7 @@ impl Document {
         }
     }
 
-    /// FileInfoからファイルデータを読み出す (オンデマンドアーカイブ対応)
+    /// FileInfoからファイルデータを取得する (オンデマンドアーカイブ対応)
     fn read_file_data(&self, info: &crate::file_info::FileInfo) -> Result<Vec<u8>> {
         match &info.source {
             FileSource::ArchiveEntry {
@@ -1093,25 +1093,25 @@ impl Document {
                 entry,
                 on_demand: true,
             } => {
-                // キャッシュされたZIPバッファから読み出し (Stored最適化付き)
+                // キャッシュされたZIPバッファから取得 (Stored最適化付き)
                 let buffers = self.zip_buffers.read().expect("zip_buffers lock poisoned");
                 if let Some(buffer) = buffers.get(archive) {
                     crate::archive::zip::ZipHandler::read_entry_from_buffer(buffer.as_ref(), entry)
                 } else {
-                    // キャッシュミス (通常発生しない): ファイルから直接読み出し
+                    // キャッシュミス (通常発生しない): ファイルから直接取得
                     drop(buffers);
                     self.archive_manager.read_entry(archive, entry)
                 }
             }
             FileSource::PendingContainer { .. } => {
-                anyhow::bail!("未展開コンテナからは読み出せない")
+                anyhow::bail!("未展開コンテナからは取得できない")
             }
             _ => std::fs::read(&info.path)
                 .with_context(|| format!("ファイル読み込み失敗: {}", info.path.display())),
         }
     }
 
-    /// 現在のファイルのデータを読み出す (app.rsのファイル操作用)
+    /// 現在のファイルのデータを取得する (app.rsのファイル操作用)
     pub fn read_file_data_current(&self) -> Result<Vec<u8>> {
         let current = self
             .file_list
@@ -1458,7 +1458,7 @@ impl Document {
         }
     }
 
-    /// 編集セッションを破棄する (未保存の変更を捨てる)
+    /// 編集セッションを破棄する (未保存の変更を破棄する)
     pub fn discard_editing_session(&mut self) {
         self.editing_session = None;
     }

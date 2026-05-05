@@ -162,7 +162,7 @@ impl AppWindow {
     pub(crate) fn action_open_bookmark_folder(&mut self) {
         let dir = crate::bookmark::bookmark_dir();
         if let Err(e) = std::fs::create_dir_all(&dir) {
-            // ディレクトリがすでにある場合は無視されるため、ここに来るのは権限不足等。
+            // ディレクトリがすでにある場合は無視されるため、到達するのは権限不足等。
             // explorer.exe 起動側でも失敗するため致命的にせず警告のみ。
             eprintln!(
                 "警告: ブックマークディレクトリ作成失敗: {} ({e})",

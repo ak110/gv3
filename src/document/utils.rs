@@ -4,7 +4,7 @@
 use std::path::Path;
 
 /// パス列をファイル名の自然順 (Windows エクスプローラー互換) で並べ替える。
-/// D&D や CLI 引数の選択順を、ユーザー期待のエクスプローラー表示順へ寄せるために使う。
+/// D&D や CLI 引数の選択順を、ユーザー期待のエクスプローラー表示順へ整列させるために使う。
 pub(super) fn sort_paths_natural(paths: &mut [std::path::PathBuf]) {
     use crate::file_list::compare_paths_natural;
     paths.sort_by(|a, b| {
@@ -62,7 +62,7 @@ fn walk_folder_recursive(folder: &Path, out: &mut Vec<std::path::PathBuf>) {
     }
 }
 
-/// 現在のスレッドの I/O 優先度を `THREAD_MODE_BACKGROUND_BEGIN` に落とす。
+/// 現在のスレッドの I/O 優先度を `THREAD_MODE_BACKGROUND_BEGIN` へ変更する。
 ///
 /// バックグラウンド展開用の rayon ワーカースレッドから呼び出す。成功すると、
 /// そのスレッドが発行する全ての I/O リクエストは Windows I/O スケジューラで
@@ -79,9 +79,9 @@ pub(super) fn set_current_thread_background_io_priority() -> windows::core::Resu
 /// バックグラウンド展開用の rayon プールを構築する。
 ///
 /// - 並列度は 1 に固定する。HDD ではシーク競合を避けるため 1 並列が最適で、
-///   SSD でも ZIP のセントラルディレクトリ読み出しに並列は不要である。
+///   SSD でも ZIP のセントラルディレクトリ読み込みに並列は不要である。
 /// - ワーカースレッド起動時に `set_current_thread_background_io_priority` を
-///   呼び、I/O 優先度を Low に落とす。rayon の `start_handler` は戻り値を
+///   呼び、I/O 優先度を Low に設定する。rayon の `start_handler` は戻り値を
 ///   持たないため、失敗時は `eprintln!` で記録してプール構築自体は成功させる。
 pub(super) fn build_expansion_pool() -> anyhow::Result<rayon::ThreadPool> {
     use anyhow::Context;

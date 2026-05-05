@@ -117,7 +117,7 @@ mod tests {
     #[test]
     fn dead_process_is_not_alive() {
         // PID=0はSystem Idle Process、通常OpenProcessでアクセス拒否される
-        // 非常に大きいPIDはまず存在しない
+        // 最大値に近いPIDは通常存在しない
         assert!(!is_process_alive(u32::MAX));
     }
 }

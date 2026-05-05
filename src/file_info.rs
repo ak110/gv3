@@ -14,7 +14,7 @@ pub enum FileSource {
     ArchiveEntry {
         archive: PathBuf,
         entry: String,
-        /// trueならオンデマンド読み出し、falseならtemp展開済み
+        /// trueならオンデマンド取得、falseならtemp展開済み
         on_demand: bool,
     },
     /// PDFのページ

@@ -54,11 +54,11 @@ impl ArchiveHandler for SevenZHandler {
                     return Ok(true);
                 }
 
-                // エントリデータを読み出し
+                // エントリデータを取得
                 let mut data = Vec::new();
                 std::io::Read::read_to_end(data_reader, &mut data)?;
 
-                // target_dirに書き出し
+                // target_dirに保存
                 let out_path = resolve_filename(&target_dir, filename);
                 std::fs::write(&out_path, &data)?;
                 results.push((out_path, entry_path));

@@ -50,7 +50,7 @@ impl AppWindow {
         // ファイルソースに応じてダイアログのラベルを分岐
         let (dialog_title, dialog_button) = match &source {
             crate::file_info::FileSource::File(_) => ("ファイルを移動", "移動"),
-            _ => ("ファイルを書き出す", "書き出す"),
+            _ => ("ファイルを保存", "保存"),
         };
 
         if let Ok(Some(dest)) = crate::file_ops::save_file_dialog(
@@ -86,7 +86,7 @@ impl AppWindow {
                     }
                 }
                 crate::file_info::FileSource::ArchiveEntry { on_demand, .. } => {
-                    // アーカイブエントリ: 書き出し (リスト除去なし)
+                    // アーカイブエントリ: 保存 (リスト除去なし)
                     let result = if *on_demand {
                         self.document.read_file_data_current().and_then(|data| {
                             std::fs::write(&dest, &data).map_err(anyhow::Error::from)
@@ -97,7 +97,7 @@ impl AppWindow {
                             .map_err(anyhow::Error::from)
                     };
                     if let Err(e) = result {
-                        self.show_error_title(&format!("ファイルの書き出しに失敗しました: {e}"));
+                        self.show_error_title(&format!("ファイルの保存に失敗しました: {e}"));
                     }
                 }
                 crate::file_info::FileSource::PdfPage { .. }
@@ -131,7 +131,7 @@ impl AppWindow {
                         ..
                     }
                 ) {
-                    // オンデマンド: アーカイブから読み出して書き出し
+                    // オンデマンド: アーカイブから読み込んで保存
                     self.document
                         .read_file_data_current()
                         .and_then(|data| std::fs::write(&dest, &data).map_err(anyhow::Error::from))

@@ -32,7 +32,7 @@ pub(crate) fn group_key(info: &FileInfo) -> GroupKey {
 /// 現在のファイル列から `group_key` の出現順を計算する。
 ///
 /// リスト上での連続性に依存しないため、論理パス順で同一グループのファイルが
-/// 他グループの要素を挟んで分断されていても正しく動作する。
+/// 他グループの要素が間に存在して分断されていても正しく動作する。
 /// 戻り値: (各グループの最初の登場 index, 各ファイルが属するグループ index)
 pub(crate) fn compute_group_layout(files: &[FileInfo]) -> (Vec<usize>, Vec<usize>) {
     let mut seen: HashMap<GroupKey, usize> = HashMap::new();

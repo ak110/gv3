@@ -24,18 +24,18 @@ Windows用画像ビューアー（Rust製）。多形式対応と高速切り替
 ## コーディング規約
 
 Rust実装の規約（ロックpoison・TOML SSOT・自然順比較・エラーハンドリング）は
-[.claude/rules/coding-standards.md](.claude/rules/coding-standards.md)に集約している。
+[.claude/rules/coding-standards.md](.claude/rules/coding-standards.md)に集約する。
 Windowsバッチファイル生成の規約（CP932・UTF-8 BOM・chcp・goto構文）は
-[.claude/rules/windows-batch-generation.md](.claude/rules/windows-batch-generation.md)に集約している。
-これらのファイルは自動ロードされないため、該当する作業の着手前に参照すること。
+[.claude/rules/windows-batch-generation.md](.claude/rules/windows-batch-generation.md)に集約する。
+これらのファイルは自動ロードされないため、該当する作業の着手前に参照する。
 
 ## サブエージェント・スキル連携
 
 `unsafe`ブロックを新規追加・変更した直後は、必ず`Task`ツールで
-`subagent_type=unsafe-reviewer`を呼び出し、対象ファイルの絶対パスを与えてレビューを依頼すること。
+`subagent_type=unsafe-reviewer`を呼び出し、対象ファイルの絶対パスを与えてレビューを依頼する。
 既存の`unsafe`を含むファイルを編集しても、`unsafe`部分そのものに変更がなければ対象外。
 
-SAFETYコメントの粒度判定基準は[.claude/agents/unsafe-reviewer.md](.claude/agents/unsafe-reviewer.md)を唯一のSSOTとする。
+SAFETYコメントの粒度判定基準は[.claude/agents/unsafe-reviewer.md](.claude/agents/unsafe-reviewer.md)をSSOTとする。
 
 ## 注意点
 
@@ -43,4 +43,5 @@ SAFETYコメントの粒度判定基準は[.claude/agents/unsafe-reviewer.md](.c
   cargo-clippy / cargo-test / cargo-denyはWindowsターゲットのためLinuxでは失敗する
 - Makefileではなく`mise.toml`のタスクを使用する。pre-commitフレームワークは`uvx pre-commit`で呼び出す
 - `taiki-e/install-action@cargo-deny`はツール名タグ形式のためpinactでハッシュピン不可（`.pinact.yaml`で除外済み）
-- Linux環境での検証コマンド実行時は`LOCALAPPDATA=/tmp/dummy`環境変数を付与する（`mise.toml`がWindows前提で`LOCALAPPDATA`を参照しているため）
+- Linux環境での検証コマンド実行時は`LOCALAPPDATA=/tmp/dummy`環境変数を付与する。
+  `mise.toml`がWindows前提で`LOCALAPPDATA`を参照しているため

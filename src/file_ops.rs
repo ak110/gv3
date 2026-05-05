@@ -203,7 +203,7 @@ pub fn select_folder_dialog(
 /// - `default_name`: デフォルトファイル名 (拡張子付きを推奨)。
 /// - `filter_name` / `filter_ext`: ファイル種別フィルタの表示名と spec (`"*.png"` 等)。
 /// - `default_ext`: 拡張子文字列 (`"png"` のように先頭ドット無し)。ユーザーがファイル名
-///   から拡張子を消した場合に Windows 側で自動補完される。補完が不要な場合 (`*.*`
+///   から拡張子を削除した場合に Windows 側で自動補完される。補完が不要な場合 (`*.*`
 ///   フィルタなど) は空文字を渡す。
 /// - `initial_dir`: 指定すればそのフォルダを初期表示する。
 /// - `title` / `ok_button_label`: ダイアログのタイトルと OK ボタンラベルのカスタマイズ。
@@ -266,7 +266,7 @@ pub fn save_file_dialog(hwnd: HWND, params: SaveFileDialogParams<'_>) -> Result<
         }];
         dialog.SetFileTypes(&filters)?;
 
-        // デフォルト拡張子の補完設定 (ユーザーがファイル名から拡張子を消した場合に Windows
+        // デフォルト拡張子の補完設定 (ユーザーがファイル名から拡張子を削除した場合に Windows
         // 側で自動補完される)。先頭ドット無しの拡張子文字列を渡す必要がある。
         let ext_wide;
         if !default_ext.is_empty() {

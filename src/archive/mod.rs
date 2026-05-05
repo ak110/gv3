@@ -13,7 +13,7 @@ use crate::extension_registry::ExtensionRegistry;
 /// アーカイブ展開結果: (展開先tempパス, アーカイブ内エントリパス)
 pub type ExtractedEntry = (PathBuf, String);
 
-/// オンデマンド読み出し用のアーカイブ内画像エントリ情報
+/// オンデマンド取得用のアーカイブ内画像エントリ情報
 pub struct ArchiveImageEntry {
     /// アーカイブ内パス (例: "subfolder/image.png")
     pub entry_name: String,
@@ -33,14 +33,14 @@ pub trait ArchiveHandler: Send + Sync {
     fn extract_images(&self, archive_path: &Path, target_dir: &Path)
     -> Result<Vec<ExtractedEntry>>;
 
-    /// オンデマンド読み出しに対応しているかどうか
+    /// オンデマンド取得に対応しているかどうか
     fn supports_on_demand(&self) -> bool {
         false
     }
 
-    /// アーカイブから指定エントリのデータを読み出す
+    /// アーカイブから指定エントリのデータを取得する
     fn read_entry(&self, _archive_path: &Path, _entry_name: &str) -> Result<Vec<u8>> {
-        bail!("オンデマンド読み出し未対応")
+        bail!("オンデマンド取得未対応")
     }
 }
 
@@ -102,13 +102,13 @@ impl ArchiveManager {
             .extract_images(archive_path, target_dir)
     }
 
-    /// パスに対応するハンドラがオンデマンド読み出しに対応しているか判定する
+    /// パスに対応するハンドラがオンデマンド取得に対応しているか判定する
     pub fn supports_on_demand(&self, archive_path: &Path) -> bool {
         self.find_handler(archive_path)
             .is_ok_and(ArchiveHandler::supports_on_demand)
     }
 
-    /// アーカイブから指定エントリのデータを読み出す (オンデマンド用)
+    /// アーカイブから指定エントリのデータを取得する (オンデマンド用)
     pub fn read_entry(&self, archive_path: &Path, entry_name: &str) -> Result<Vec<u8>> {
         self.find_handler(archive_path)?
             .read_entry(archive_path, entry_name)
@@ -124,7 +124,7 @@ impl ArchiveManager {
         if ext == ".zip" || ext == ".cbz" {
             return zip::ZipHandler::list_images_from_buffer(buffer, &self.registry);
         }
-        bail!("バッファベース読み出し未対応: {}", archive_path.display());
+        bail!("バッファベース取得未対応: {}", archive_path.display());
     }
 }
 
@@ -157,7 +157,7 @@ pub fn resolve_filename(target_dir: &Path, original_name: &str) -> std::path::Pa
         }
     }
 
-    // 万が一9999まで使い切った場合 (実質ありえない)
+    // 9999まで全て使用済みの場合 (実質ありえない)
     target_dir.join(format!("{original_name}_overflow"))
 }
 
@@ -336,7 +336,7 @@ mod tests {
         let result = mgr.list_images_from_buffer(b"", Path::new("test.rar"));
         assert!(result.is_err());
         let msg = result.err().unwrap().to_string();
-        assert!(msg.contains("バッファベース読み出し未対応"), "got: {msg}");
+        assert!(msg.contains("バッファベース取得未対応"), "got: {msg}");
     }
 
     #[test]

@@ -37,7 +37,7 @@ pub fn center_on_parent(parent: HWND, width: i32, height: i32) -> (i32, i32) {
     };
     if unsafe { GetMonitorInfoW(monitor, std::ptr::from_mut(&mut mi)) }.as_bool() {
         let rc = mi.rcWork;
-        // ダイアログがモニターより大きい場合はワーク領域の左上に寄せる
+        // ダイアログがモニターより大きい場合はワーク領域の左上へ配置する
         let x = cx.clamp(rc.left, (rc.right - width).max(rc.left));
         let y = cy.clamp(rc.top, (rc.bottom - height).max(rc.top));
         (x, y)

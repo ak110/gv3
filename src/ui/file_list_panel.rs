@@ -166,7 +166,7 @@ impl FileListPanel {
 
     /// 単一項目を再描画要求する (マーク・キャッシュ状態の変更用)
     /// 仮想モードでは項目データを LV が保持しないので、行のみ無効化すれば
-    /// 次回描画時に親ウィンドウへ再度 LVN_GETDISPINFO で問い合わせが行く。
+    /// 次回描画時に親ウィンドウへ再度 LVN_GETDISPINFO で問い合わせが送られる。
     pub fn update_item(&self, index: usize) {
         let i = i32::try_from(index).unwrap_or(i32::MAX);
         unsafe {

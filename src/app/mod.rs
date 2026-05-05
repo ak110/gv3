@@ -986,7 +986,7 @@ impl AppWindow {
             Action::MarkedCopyNames => self.action_marked_copy_names(),
             Action::PasteImage => self.action_paste_image(),
 
-            // --- 画像書き出し ---
+            // --- 画像保存 ---
             Action::ExportJpg => self.export_image(ExportFormat::Jpg),
             Action::ExportBmp => self.export_image(ExportFormat::Bmp),
             Action::ExportPng => self.export_image(ExportFormat::Png),
@@ -1202,7 +1202,7 @@ impl AppWindow {
         }
     }
 
-    /// 画像を指定フォーマットで書き出す
+    /// 画像を指定フォーマットで保存する
     fn export_image(&mut self, format: ExportFormat) {
         let Some(img) = self.document.current_image() else {
             return;
@@ -1488,7 +1488,7 @@ Susieプラグイン (.sph/.spi) で拡張可能";
     }
 }
 
-/// 画像書き出しフォーマット。各バリアントが拡張子・フィルタ表示・`image::ImageFormat`
+/// 画像保存フォーマット。各バリアントが拡張子・フィルタ表示・`image::ImageFormat`
 /// を一元管理する。`Action::Export*` から `export_image` に渡される。
 #[derive(Copy, Clone)]
 enum ExportFormat {
@@ -1531,7 +1531,7 @@ impl ExportFormat {
     }
 }
 
-/// RGBA バッファを指定パスへ指定フォーマットで書き出す。
+/// RGBA バッファを指定パスへ指定フォーマットで保存する。
 ///
 /// `image::ImageBuffer<Rgba<u8>, _>` を直接 `save_with_format` に渡すと、JPEG エンコーダ
 /// が RGBA を受け付けず色型エラーで失敗する。`DynamicImage` を経由することで `image`
@@ -1549,7 +1549,7 @@ fn write_image_to_path(
     let dynamic = image::DynamicImage::ImageRgba8(img_buf);
     dynamic
         .save_with_format(path, format.image_format())
-        .map_err(|e| anyhow::anyhow!("画像の書き出しに失敗しました: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("画像の保存に失敗しました: {e}"))?;
     Ok(())
 }
 
@@ -1572,7 +1572,7 @@ mod tests {
         (1, 1, vec![255, 255, 255, 255])
     }
 
-    /// 拡張子なしパスでも PNG として書き出せる (本バグ修正の回帰テスト)。
+    /// 拡張子なしパスでも PNG として保存できる (本バグ修正の回帰テスト)。
     /// 修正前は `image::RgbaImage::save()` がパスから形式を推定できず
     /// "The image format could not be determined" で失敗していた。
     #[test]

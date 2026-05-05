@@ -86,7 +86,7 @@ pub fn render_pdf_page(pdf_path: &Path, page_index: u32) -> Result<DecodedImage>
         .join()
         .context("レンダリング失敗")?;
 
-    // ストリームからバイト列を読み出す
+    // ストリームからバイト列を取得する
     stream.Seek(0).context("ストリームSeek失敗")?;
     let size = stream.Size().context("ストリームサイズ取得失敗")? as u32;
     let reader = DataReader::CreateDataReader(&stream).context("DataReader作成失敗")?;
@@ -97,9 +97,7 @@ pub fn render_pdf_page(pdf_path: &Path, page_index: u32) -> Result<DecodedImage>
         .context("データ読み込み失敗")?;
 
     let mut png_data = vec![0u8; size as usize];
-    reader
-        .ReadBytes(&mut png_data)
-        .context("バイト読み出し失敗")?;
+    reader.ReadBytes(&mut png_data).context("バイト取得失敗")?;
 
     // PNG → RGBA デコード (image crateを使用)
     let img = image::load_from_memory_with_format(&png_data, image::ImageFormat::Png)

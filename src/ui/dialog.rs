@@ -20,7 +20,7 @@ pub unsafe fn get_window_data<T>(hwnd: HWND) -> Option<&'static mut T> {
 /// 共通モーダルループ
 ///
 /// `hwnd` のウィンドウループを `closed` が指す値が `true` になるまで実行する。
-/// 終了後に `parent` を再有効化して前面に出す。
+/// 終了後に `parent` を再有効化して前面へ配置する。
 ///
 /// # Safety
 /// `hwnd` と `parent` は有効な HWND であること。

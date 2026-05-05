@@ -73,7 +73,7 @@ pub fn build_menu_bar() -> HMENU {
         // 画像(&I)
         let image_menu = create_popup(&[
             Some((Action::DeselectSelection, "選択範囲を取り消し\tEnter")),
-            Some((Action::Crop, "画像の切り抜き\tCtrl+Shift+X")),
+            Some((Action::Crop, "画像のトリミング\tCtrl+Shift+X")),
             None,
             Some((Action::Fill, "塗り潰す\tCtrl+Shift+F")),
             Some((Action::Levels, "レベル補正\tCtrl+L")),
@@ -98,9 +98,9 @@ pub fn build_menu_bar() -> HMENU {
             Some((Action::PasteImage, "クリップボードから貼り付け\tCtrl+V")),
             Some((Action::CopyFileName, "ファイル名をコピー\tCtrl+F")),
             None,
-            Some((Action::ExportJpg, "JPGとして書き出す\tCtrl+J")),
-            Some((Action::ExportBmp, "BMPとして書き出す\tCtrl+B")),
-            Some((Action::ExportPng, "PNGとして書き出す\tCtrl+P")),
+            Some((Action::ExportJpg, "JPGとして保存\tCtrl+J")),
+            Some((Action::ExportBmp, "BMPとして保存\tCtrl+B")),
+            Some((Action::ExportPng, "PNGとして保存\tCtrl+P")),
             None,
             Some((Action::ShowImageInfo, "画像情報\tホイールクリック")),
         ]);

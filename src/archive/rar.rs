@@ -56,7 +56,7 @@ impl ArchiveHandler for RarHandler {
                 && self.registry.is_image_extension(filename);
 
             if should_extract {
-                // エントリデータを読み出す
+                // エントリデータを取得する
                 match cursor.read() {
                     Ok((data, next)) => {
                         let out_path = resolve_filename(target_dir, filename);

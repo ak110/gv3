@@ -13,12 +13,12 @@
 mise install && mise run setup
 ```
 
-`cargo`や`node`、`pnpm`などのコマンドはシステムにインストールされたものではなく、必ずmise経由で実行すること。
-具体的には`mise run`タスク経由、またはmiseが管理するPATH上のバイナリを使用する。
+`cargo`・`node`・`pnpm`などのコマンドはシステムにインストールされたものではなく、mise経由で実行する。
+`mise run`タスク経由、またはmiseが管理するPATH上のバイナリを使用する。
 
 ## 開発コマンド
 
-普段使うのはこの2つ。
+日常的に使用するのは次の2つ。
 
 | コマンド          | 内容                                                        |
 | ----------------- | ----------------------------------------------------------- |
@@ -27,7 +27,7 @@ mise install && mise run setup
 
 `git commit`時にはpre-commitフックが`mise run test`を自動実行する。
 
-その他のタスク。
+その他のタスクを以下に示す。
 
 | コマンド          | 説明                             |
 | ----------------- | -------------------------------- |
@@ -43,16 +43,16 @@ cargo-clippy / cargo-test / cargo-denyはWindowsターゲットのためLinuxで
 
 ## サプライチェーン攻撃対策
 
-`cargo-deny`（`deny.toml`設定）でライセンスチェックと脆弱性アドバイザリチェックを実施している。
+`cargo-deny`（`deny.toml`設定）でライセンスチェックと脆弱性アドバイザリチェックを実施する。
 `mise run test`に組み込まれているため、コミット前に自動実行される。
 
-また、GitHub Actionsのワークフローは`pinact`でハッシュピン留めして実行している
+GitHub Actionsのワークフローは`pinact`でハッシュピン留めして実行する
 （`mise run update`でハッシュピン更新が可能）。
 `taiki-e/install-action@cargo-deny`はツール名タグ形式のためpinactでハッシュピン不可（`.pinact.yaml`で除外済み）。
 
 ## ドキュメントサイト運用
 
-ドキュメントは [VitePress](https://vitepress.dev/) で構築し、GitHub Pagesでホストしている
+ドキュメントは[VitePress](https://vitepress.dev/)で構築し、GitHub Pagesでホストする
 （URL: <https://ak110.github.io/gv/>）。
 
 - ローカルプレビュー: `mise run docs`

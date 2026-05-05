@@ -10,7 +10,7 @@ const CURSOR_HIDE_DELAY_MS: u32 = 3000;
 pub struct CursorHider {
     /// カーソルが非表示状態か
     hidden: bool,
-    /// カーソル自動非表示が有効か (Num-でトグル)
+    /// カーソル自動非表示が機能しているか (Num-でトグル)
     enabled: bool,
 }
 
@@ -45,7 +45,7 @@ impl CursorHider {
         }
     }
 
-    /// カーソル自動非表示が有効か
+    /// カーソル自動非表示が機能しているか
     pub fn is_enabled(&self) -> bool {
         self.enabled
     }
